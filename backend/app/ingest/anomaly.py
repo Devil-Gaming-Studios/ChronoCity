@@ -33,7 +33,15 @@ class AnomalyDetector:
             return 0.0
         return (value - mean) / std
 
-    def detect(self, agg: dict[str, Any]) -> list[Incident]:
+    def detect(self, agg: dict[str, Any] | list[dict[str, Any]]) -> list[Incident]:
+        # The bus loop sends one summary at a time; tests and integrations may
+        # hand us the complete Aggregator.flush() list. Support both forms.
+        if isinstance(agg, list):
+            incidents: list[Incident] = []
+            for summary in agg:
+                incidents.extend(self.detect(summary))
+            return incidents
+
         zone = agg["zone"]
         kind = agg["kind"]
         peak = agg["max"]

@@ -147,6 +147,63 @@ npm run dev             # http://localhost:5173
 Vite proxies `/api` and `/ws` to `http://localhost:8000`, so keep the backend running on
 port 8000. A production type-check + bundle is `npm run build` (runs `tsc -b` first).
 
+## Data-driven cities and simulations
+
+The built-in Flood/Trip/Combined buttons are deterministic demo scenarios. They are still useful for smoke tests, but they are **not** the only simulation path. The API now supports importing a real-world road/building area from OpenStreetMap and running hazards against whichever city graph is active.
+
+### Import an OpenStreetMap area
+
+The importer accepts a WGS84 bounding box and queries an Overpass API endpoint. It imports:
+
+- drivable roads as route edges with length, lanes, speed, names, and OSM tags
+- building footprints with height/levels for local 3D extrusion
+- hospitals and substations when they are mapped in the selected area
+- mapped waterways, power lines, and pipelines as preserved infrastructure assets
+
+Use a small area (the API enforces a maximum bbox size) and keep the attribution returned by the API: **© OpenStreetMap contributors · ODbL**. See https://www.openstreetmap.org/copyright for the full attribution/license guidance.
+
+```bash
+# Example: import a small Midtown Manhattan area
+curl -X POST http://localhost:8000/api/cities/import/osm \
+  -H "Content-Type: application/json" \
+  -d '{"south":40.7485,"west":-73.9955,"north":40.7515,"east":-73.9915,"name":"Midtown sample"}'
+
+# Inspect the active city and the event targets available to simulations
+curl http://localhost:8000/api/cities/current
+curl http://localhost:8000/api/simulations/capabilities
+```
+
+The imported city is currently held in memory and becomes the active city for the running backend process. Restarting the backend returns to the demo city; production persistence can be added with the existing database layer.
+
+### Run a custom simulation
+
+Use the edge ID returned by `/api/simulations/capabilities` or `/api/city`. Hazards are data-driven: the result changes with the imported road topology and the edge/signal/substation selected.
+
+```bash
+# Flood any edge in the active city
+curl -X POST http://localhost:8000/api/simulations/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "label":"custom flood test",
+    "start_from":"healthy",
+    "hazards":[
+      {"type":"flood","edge_id":"OSM_E_REPLACE_ME","depth_cm":120}
+    ]
+  }'
+
+# Close a road, trip a mapped substation, or darken selected signals
+# hazard types: flood | close_edge | power_outage | signal_dark
+```
+
+The response includes an `answer`, an `explanation` list, affected nodes, before/after snapshots, blocked edges, and a trace. That makes the service usable without depending on an LLM to explain the physical result.
+
+### What is and is not modeled yet
+
+- **Implemented:** topology-driven road travel times, flooded/closed edge blocking, signal-dark congestion penalties, OSM road/building import, and local 3D building extrusion.
+- **Preserved for extension:** OSM power lines, waterways, and pipelines are returned as infrastructure assets.
+- **Not invented:** if a city does not map its electrical feeders, pipes, sensors, elevations, or building heights in OSM, the simulator does not pretend those details exist.
+- **Next production layer:** attach authoritative utility GIS/SCADA/IoT feeds and domain solvers for hydraulics, electrical load flow, drainage, terrain, and sensor calibration.
+
 ## 3. Trigger the demo
 
 **Option A — in the UI (recommended):** open http://localhost:5173 and press **Combined**
@@ -244,5 +301,6 @@ Mutating tools are never registered directly with an agent. Agents submit `Actio
 read/estimate tools only; the Critic verifies the joint plan in simulation, `HIGH`-impact actions
 require an operator approval in the UI before `POST /api/plans/execute` writes to the twin, and
 every step lands in the `action_log` (`GET /api/plans/action_log`).
-#   C h r o n o C i t y  
+#   C h r o n o C i t y 
+ 
  

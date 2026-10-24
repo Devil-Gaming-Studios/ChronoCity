@@ -11,6 +11,7 @@ from ..models import (
     Edge,
     Feeder,
     Hospital,
+    HospitalDepartment,
     InfrastructureAsset,
     Node,
     Substation,
@@ -18,7 +19,7 @@ from ..models import (
 )
 
 
-OSM_ATTRIBUTION = "© OpenStreetMap contributors"
+OSM_ATTRIBUTION = "© OpenStreetMap contributors · ODbL"
 DEFAULT_OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 # Footways and similar ways are useful map context, but are not vehicle routes in
@@ -316,7 +317,17 @@ async def import_osm_bbox(
             node_id = add_asset_node(element, "hospital", "Hospital")
             if node_id:
                 hospital_id = f"H_{element.get('id', len(hospitals))}"
-                hospitals.append(Hospital(id=hospital_id, node_id=node_id, name=tags.get("name", "Hospital")))
+                hospitals.append(
+                    Hospital(
+                        id=hospital_id,
+                        node_id=node_id,
+                        name=tags.get("name", "Hospital"),
+                        departments=[
+                            HospitalDepartment(id=f"{hospital_id}-ED", name="Emergency", total_beds=20, available_beds=10),
+                            HospitalDepartment(id=f"{hospital_id}-ICU", name="ICU", total_beds=8, available_beds=3),
+                        ],
+                    )
+                )
         if tags.get("power") == "substation":
             node_id = add_asset_node(element, "substation", "Substation")
             if node_id:

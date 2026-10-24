@@ -7,6 +7,7 @@ from ..models import (
     Edge,
     Feeder,
     Hospital,
+    HospitalDepartment,
     Node,
     Signal,
     Substation,
@@ -68,6 +69,10 @@ def build_demo_city() -> CityGraph:
         road("E_N5_J6", "N5", "J6", 200),
         road("E_J8_H1", "J8", "H1", 200),
         road("E_DEPOT_J1", "DEPOT", "J1", 150),
+        # utility connectors keep the infrastructure graph connected without
+        # changing the road topology used for ordinary route planning.
+        road("E_S1_N6", "S1", "N6", 100, kind="feeder"),
+        road("E_S2_J7", "S2", "J7", 100, kind="feeder"),
     ]
 
     substations = [
@@ -96,7 +101,18 @@ def build_demo_city() -> CityGraph:
         Signal(id="SIG_N7", node_id="N7", feeder_id="F4"),
     ]
 
-    hospitals = [Hospital(id="H1", node_id="H1", name="City General")]
+    hospitals = [
+        Hospital(
+            id="H1",
+            node_id="H1",
+            name="City General",
+            departments=[
+                HospitalDepartment(id="H1-ED", name="Emergency", total_beds=24, available_beds=12),
+                HospitalDepartment(id="H1-ICU", name="ICU", total_beds=10, available_beds=4),
+                HospitalDepartment(id="H1-SURG", name="Surgery", total_beds=16, available_beds=8),
+            ],
+        )
+    ]
     underpasses = [Underpass(id="U1", edge_id="E_J4_J6_U1", name="River Road Underpass")]
 
     return CityGraph(
@@ -107,6 +123,9 @@ def build_demo_city() -> CityGraph:
         signals=signals,
         hospitals=hospitals,
         underpasses=underpasses,
+        source="demo",
+        source_ref="built-in",
+        name="ChronoTwin Demo City",
     )
 
 

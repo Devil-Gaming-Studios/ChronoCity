@@ -13,6 +13,19 @@ from ..models import (
 )
 
 
+def _freeze(value: Any) -> Any:
+    """Make nested action parameters safe to use in a deterministic signature."""
+    if isinstance(value, dict):
+        return tuple(sorted((str(k), _freeze(v)) for k, v in value.items()))
+    if isinstance(value, (list, tuple, set)):
+        return tuple(_freeze(v) for v in value)
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
+
+
 class PlanToolbox:
     """The only tools agents use to submit work. Mutating actions are returned
     as data (Action objects) inside a proposal; nothing executes here.
@@ -48,7 +61,7 @@ class PlanToolbox:
         seen: set[tuple] = set()
         for p in proposals:
             for a in p.actions:
-                sig = (a.tool, tuple(a.entity_ids), tuple(sorted(a.params.items(), key=lambda kv: kv[0])))
+                sig = (a.tool, tuple(a.entity_ids), _freeze(a.params))
                 if sig in seen:  # exact duplicates from overlapping incidents
                     continue
                 seen.add(sig)

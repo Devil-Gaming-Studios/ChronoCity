@@ -127,10 +127,19 @@ class Signal(BaseModel):
     feeder_id: str
 
 
+class HospitalDepartment(BaseModel):
+    id: str
+    name: str
+    total_beds: int = 0
+    available_beds: int = 0
+    status: Literal["open", "limited", "closed"] = "open"
+
+
 class Hospital(BaseModel):
     id: str
     node_id: str
     name: str = "General Hospital"
+    departments: list[HospitalDepartment] = Field(default_factory=list)
 
 
 class Underpass(BaseModel):
@@ -317,5 +326,9 @@ class CitySnapshot(BaseModel):
     closed_edges: dict[str, bool] = Field(default_factory=dict)    # edge_id -> closed
     edge_factor: dict[str, float] = Field(default_factory=dict)    # edge_id -> reroute factor
     edge_travel_s: dict[str, float] = Field(default_factory=dict)  # edge_id -> seconds
+    power_load_mw: dict[str, float] = Field(default_factory=dict)  # substation_id -> load
+    failed_assets: dict[str, str] = Field(default_factory=dict)   # asset_id -> failure reason
+    water_pressure_kpa: dict[str, float] = Field(default_factory=dict)
+    water_failures: dict[str, str] = Field(default_factory=dict)
     vehicles: dict[str, str] = Field(default_factory=dict)      # vehicle_id -> edge_id
     ambulances: dict[str, dict[str, Any]] = Field(default_factory=dict)

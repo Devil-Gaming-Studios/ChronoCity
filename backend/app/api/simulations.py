@@ -13,9 +13,17 @@ router = APIRouter(prefix="/api/simulations", tags=["simulations"])
 
 
 class HazardRequest(BaseModel):
-    type: Literal["flood", "close_edge", "power_outage", "signal_dark"]
+    type: Literal[
+        "rain", "flood", "close_edge", "power_outage", "power_overload",
+        "power_wire_break", "water_pipe_break", "water_pressure", "signal_dark"
+    ]
     edge_id: str | None = None
+    asset_id: str | None = None
     depth_cm: float = Field(100.0, ge=0)
+    rain_mm: float = Field(0.0, ge=0)
+    duration_min: float = Field(30.0, ge=0)
+    load_mw: float = Field(0.0, ge=0)
+    pressure_kpa: float = Field(350.0, ge=0)
     substation_id: str | None = None
     signal_ids: list[str] = Field(default_factory=list)
     label: str = ""
@@ -32,41 +40,60 @@ def _edge_ids(graph) -> set[str]:
     return {edge.id for edge in graph.edges}
 
 
-def _hazard_action(hazard: HazardRequest, graph) -> Action:
-    edge_ids = _edge_ids(graph)
+def _hazard_actions(hazard: HazardRequest, graph) -> list[Action]:
+    edge_ids = {edge.id for edge in graph.edges}
+    asset_by_id = {asset.id: asset for asset in graph.infrastructure}
+
+    if hazard.type == "rain":
+        underpass_edges = [edge.edge_id for edge in graph.underpasses]
+        if not underpass_edges:
+            underpass_edges = [
+                edge.id for edge in graph.edges
+                if edge.kind == "underpass" or edge.tags.get("tunnel") in {"yes", "true", "1"}
+            ]
+        if not underpass_edges:
+            raise HTTPException(status_code=422, detail="No mapped underpass or flood-prone edge exists in this city")
+        depth = max(10.0, hazard.rain_mm * 0.8)
+        return [
+            Action(
+                tool="traffic.flood_edge",
+                entity_ids=[edge_id],
+                params={"edge_id": edge_id, "depth_cm": depth, "rain_mm": hazard.rain_mm, "duration_min": hazard.duration_min},
+                impact="HIGH",
+                rationale=hazard.label or f"Rainfall {hazard.rain_mm:.0f} mm over {hazard.duration_min:.0f} minutes",
+                owner="simulation",
+            )
+            for edge_id in underpass_edges
+        ]
+
     if hazard.type in {"flood", "close_edge"}:
         if not hazard.edge_id or hazard.edge_id not in edge_ids:
             raise HTTPException(status_code=422, detail=f"Unknown edge_id for {hazard.type}: {hazard.edge_id!r}")
         if hazard.type == "flood":
-            return Action(
-                tool="traffic.flood_edge",
-                entity_ids=[hazard.edge_id],
-                params={"edge_id": hazard.edge_id, "depth_cm": hazard.depth_cm},
-                impact="HIGH",
-                rationale=hazard.label or f"Flood {hazard.edge_id} at {hazard.depth_cm:.0f} cm",
-                owner="simulation",
-            )
-        return Action(
-            tool="traffic.close_edge",
-            entity_ids=[hazard.edge_id],
-            params={"edge_id": hazard.edge_id},
-            impact="HIGH",
-            rationale=hazard.label or f"Close {hazard.edge_id}",
-            owner="simulation",
-        )
+            return [Action(tool="traffic.flood_edge", entity_ids=[hazard.edge_id], params={"edge_id": hazard.edge_id, "depth_cm": hazard.depth_cm}, impact="HIGH", rationale=hazard.label or f"Flood {hazard.edge_id} at {hazard.depth_cm:.0f} cm", owner="simulation")]
+        return [Action(tool="traffic.close_edge", entity_ids=[hazard.edge_id], params={"edge_id": hazard.edge_id}, impact="HIGH", rationale=hazard.label or f"Close {hazard.edge_id}", owner="simulation")]
 
-    if hazard.type == "power_outage":
+    if hazard.type in {"power_outage", "power_overload"}:
         known = {sub.id for sub in graph.substations}
         if not hazard.substation_id or hazard.substation_id not in known:
             raise HTTPException(status_code=422, detail=f"Unknown substation_id: {hazard.substation_id!r}")
-        return Action(
-            tool="power.trip_substation",
-            entity_ids=[hazard.substation_id],
-            params={"substation_id": hazard.substation_id},
-            impact="HIGH",
-            rationale=hazard.label or f"Trip {hazard.substation_id}",
-            owner="simulation",
-        )
+        if hazard.type == "power_outage":
+            return [Action(tool="power.trip_substation", entity_ids=[hazard.substation_id], params={"substation_id": hazard.substation_id}, impact="HIGH", rationale=hazard.label or f"Trip {hazard.substation_id}", owner="simulation")]
+        return [Action(tool="power.set_load", entity_ids=[hazard.substation_id], params={"substation_id": hazard.substation_id, "load_mw": hazard.load_mw}, impact="HIGH", rationale=hazard.label or f"Set {hazard.substation_id} load to {hazard.load_mw:.1f} MW", owner="simulation")]
+
+    if hazard.type in {"power_wire_break", "water_pipe_break", "water_pressure"}:
+        if not hazard.asset_id or hazard.asset_id not in asset_by_id:
+            raise HTTPException(status_code=422, detail=f"Unknown infrastructure asset_id: {hazard.asset_id!r}")
+        asset = asset_by_id[hazard.asset_id]
+        if hazard.type == "power_wire_break" and asset.kind != "power_line":
+            raise HTTPException(status_code=422, detail=f"Asset {hazard.asset_id} is not a mapped power line")
+        if hazard.type in {"water_pipe_break", "water_pressure"} and asset.kind not in {"pipeline", "water_works", "wastewater_plant", "waterway"}:
+            raise HTTPException(status_code=422, detail=f"Asset {hazard.asset_id} is not a mapped water asset")
+        if hazard.type == "power_wire_break":
+            return [Action(tool="power.break_line", entity_ids=[hazard.asset_id], params={"asset_id": hazard.asset_id}, impact="HIGH", rationale=hazard.label or f"Break power line {hazard.asset_id}", owner="simulation")]
+        if hazard.type == "water_pipe_break":
+            return [Action(tool="water.break_pipe", entity_ids=[hazard.asset_id], params={"asset_id": hazard.asset_id}, impact="HIGH", rationale=hazard.label or f"Break water asset {hazard.asset_id}", owner="simulation")]
+        return [Action(tool="water.set_pressure", entity_ids=[hazard.asset_id], params={"asset_id": hazard.asset_id, "pressure_kpa": hazard.pressure_kpa}, impact="MEDIUM", rationale=hazard.label or f"Set water pressure on {hazard.asset_id} to {hazard.pressure_kpa:.0f} kPa", owner="simulation")]
 
     known_signals = {signal.id for signal in graph.signals}
     unknown = sorted(set(hazard.signal_ids) - known_signals)
@@ -74,15 +101,7 @@ def _hazard_action(hazard: HazardRequest, graph) -> Action:
         raise HTTPException(status_code=422, detail=f"Unknown signal_ids: {unknown}")
     if not hazard.signal_ids:
         raise HTTPException(status_code=422, detail="signal_ids is required for signal_dark")
-    return Action(
-        tool="traffic.signal_dark",
-        entity_ids=list(hazard.signal_ids),
-        params={"signal_ids": list(hazard.signal_ids)},
-        impact="MEDIUM",
-        rationale=hazard.label or f"Darken {', '.join(hazard.signal_ids)}",
-        owner="simulation",
-    )
-
+    return [Action(tool="traffic.signal_dark", entity_ids=list(hazard.signal_ids), params={"signal_ids": list(hazard.signal_ids)}, impact="MEDIUM", rationale=hazard.label or f"Darken {', '.join(hazard.signal_ids)}", owner="simulation")]
 
 def _explain(graph, hazards: list[HazardRequest], before, after, result) -> tuple[str, list[str], list[str]]:
     blocked = sorted(set(after.flooded_edges) | {eid for eid, closed in after.closed_edges.items() if closed})
@@ -98,12 +117,22 @@ def _explain(graph, hazards: list[HazardRequest], before, after, result) -> tupl
 
     explanations: list[str] = []
     for hazard in hazards:
-        if hazard.type == "flood":
+        if hazard.type == "rain":
+            explanations.append(f"Rainfall of {hazard.rain_mm:.0f} mm over {hazard.duration_min:.0f} minutes is applied to mapped flood-prone edges.")
+        elif hazard.type == "flood":
             explanations.append(f"Flooding on {hazard.edge_id} is modeled at {hazard.depth_cm:.0f} cm and blocks that road segment.")
         elif hazard.type == "close_edge":
             explanations.append(f"Road closure on {hazard.edge_id} removes that segment from route calculations.")
         elif hazard.type == "power_outage":
             explanations.append(f"The outage trips {hazard.substation_id} and darkens signals served by its feeders.")
+        elif hazard.type == "power_overload":
+            explanations.append(f"The load on {hazard.substation_id} is set to {hazard.load_mw:.1f} MW; exceeding capacity trips the station.")
+        elif hazard.type == "power_wire_break":
+            explanations.append(f"The power-line asset {hazard.asset_id} is marked failed for grid diagnostics.")
+        elif hazard.type == "water_pipe_break":
+            explanations.append(f"The water asset {hazard.asset_id} is marked as a pipe break and its pressure is set to zero.")
+        elif hazard.type == "water_pressure":
+            explanations.append(f"Water pressure on {hazard.asset_id} is modeled at {hazard.pressure_kpa:.0f} kPa.")
         else:
             explanations.append(f"The simulation marks {len(hazard.signal_ids)} signal(s) as dark, increasing travel time near them.")
 
@@ -129,12 +158,16 @@ async def capabilities(request: Request) -> dict[str, Any]:
     return {
         "city": {"name": graph.name, "source": graph.source, "source_ref": graph.source_ref},
         "hazards": [
+            {"type": "rain", "target": "rain_mm", "example": 120},
             {"type": "flood", "target": "edge_id", "example": graph.edges[0].id if graph.edges else None},
             {"type": "close_edge", "target": "edge_id", "example": graph.edges[0].id if graph.edges else None},
             {"type": "power_outage", "target": "substation_id", "example": graph.substations[0].id if graph.substations else None},
+            {"type": "power_overload", "target": "substation_id + load_mw", "example": graph.substations[0].id if graph.substations else None},
+            {"type": "power_wire_break", "target": "asset_id", "example": next((a.id for a in graph.infrastructure if a.kind == "power_line"), None)},
+            {"type": "water_pipe_break", "target": "asset_id", "example": next((a.id for a in graph.infrastructure if a.kind in {"pipeline", "waterway", "water_works"}), None)},
             {"type": "signal_dark", "target": "signal_ids", "example": [graph.signals[0].id] if graph.signals else []},
         ],
-        "actions": ["traffic.clear_flood", "traffic.reroute", "power.restore_substation", "emergency.dispatch"],
+        "actions": ["traffic.clear_flood", "traffic.reroute", "power.restore_substation", "power.set_load", "power.break_line", "water.break_pipe", "emergency.dispatch"],
     }
 
 
@@ -144,7 +177,7 @@ async def run_simulation(body: SimulationRequest, request: Request) -> dict[str,
     app = request.app
     graph = app.state.graph
     orch = app.state.orchestrator
-    hazard_actions = [_hazard_action(hazard, graph) for hazard in body.hazards]
+    hazard_actions = [action for hazard in body.hazards for action in _hazard_actions(hazard, graph)]
     all_actions = hazard_actions + body.actions
     base = orch.state.model_copy(deep=True) if body.start_from == "current" else initial_state(graph)
     plan = JointPlan(id=f"simulation-{body.label.replace(' ', '-').lower()[:36] or 'run'}", actions=all_actions, incident_ids=[], status="DRAFT")  # type: ignore[arg-type]

@@ -172,7 +172,7 @@ class Workflow:
         if plan.status != PlanStatus.APPROVED:
             # guard: HIGH-impact plan that skipped approval is refused
             if has_high_impact(plan):
-                self.orch.log(ActionLogEntry(plan_id=plan.id, tool="execute", phase="execute",
+                self.orch.log(ActionLogEntry(plan_id=plan.id, tool="execute", phase="approve",
                                              actor="system", ok=False, detail="HIGH-impact without approval"))
                 return {"ok": False, "error": "approval_required"}
             plan.status = PlanStatus.APPROVED

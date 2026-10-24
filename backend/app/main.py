@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .agents.orchestrator import Orchestrator
 from .agents.workflow import Workflow, adk_available
-from .api import cities, incidents, plans, scenarios, simulations, timeline
+from .api import cities, commands, incidents, infrastructure, plans, scenarios, simulations, timeline
 from .api.ws import ConnectionManager
 from .city.build_city import build_demo_city
 from .runtime import install_city
@@ -118,6 +118,8 @@ def create_app() -> FastAPI:
 
     app.include_router(ingest_router)
     app.include_router(cities.router)
+    app.include_router(commands.router)
+    app.include_router(infrastructure.router)
     app.include_router(incidents.router)
     app.include_router(plans.router)
     app.include_router(simulations.router)

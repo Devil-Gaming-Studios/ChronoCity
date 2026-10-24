@@ -20,6 +20,9 @@ class Negotiator:
         self.name = "negotiator"
 
     def resolve(self, plan: JointPlan) -> JointPlan:
+        # Return a revised plan object rather than mutating the caller's
+        # submitted plan. This preserves the original proposal for audit/history.
+        plan = plan.model_copy(deep=True)
         if not plan.conflicts:
             if not plan.resolution:
                 plan.resolution = "No conflicts; joint plan accepted as-is."

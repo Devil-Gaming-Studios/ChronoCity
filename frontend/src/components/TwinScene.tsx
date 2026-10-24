@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { Cascade, CityGraph, CitySnapshot } from "../types";
+import type { Cascade, CityBuilding, CityGraph, CitySnapshot, MapSelection } from "../types";
 
 export type ViewMode = "before" | "present" | "whatif";
 
@@ -12,6 +12,8 @@ interface Props {
   whatIfState: CitySnapshot | null;
   cascade: Cascade | null;
   viewMode: ViewMode;
+  onSelect?: (selection: MapSelection | null) => void;
+  selectedId?: string | null;
 }
 
 interface Handles {
@@ -51,6 +53,14 @@ const toWorld = (x: number, y: number): [number, number] => [x, -y];
 function addCity<T extends THREE.Object3D>(scene: THREE.Scene, object: T): T {
   (object as any).__city = true;
   scene.add(object);
+  return object;
+}
+
+function makePickable(object: THREE.Object3D, type: string, id: string, label: string) {
+  object.userData.pickable = true;
+  object.userData.entityType = type;
+  object.userData.entityId = id;
+  object.userData.entityLabel = label;
   return object;
 }
 
@@ -131,6 +141,30 @@ function addBuilding(
   }
 }
 
+function addImportedBuilding(scene: THREE.Scene, building: CityBuilding) {
+  if (building.footprint.length < 3) return;
+  const shape = new THREE.Shape();
+  building.footprint.forEach(([x, y], index) => {
+    if (index === 0) shape.moveTo(x, y);
+    else shape.lineTo(x, y);
+  });
+  shape.closePath();
+  const height = Math.max(0.12, building.height_m / 75);
+  const geometry = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
+  geometry.rotateX(-Math.PI / 2);
+  const kind = building.kind.toLowerCase();
+  const color = kind.includes("industrial") ? 0x475569 : kind.includes("commercial") ? 0x294b63 : 0x25364a;
+  const mesh = new THREE.Mesh(
+    geometry,
+    new THREE.MeshStandardMaterial({ color, roughness: 0.88, metalness: 0.04 })
+  );
+  mesh.position.y = 0.02;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  makePickable(mesh, "building", building.id, building.name || building.id);
+  addCity(scene, mesh);
+}
+
 function addPark(scene: THREE.Scene, x: number, z: number, width: number, depth: number) {
   const park = new THREE.Mesh(
     new THREE.BoxGeometry(width, 0.035, depth),
@@ -143,8 +177,10 @@ function addPark(scene: THREE.Scene, x: number, z: number, width: number, depth:
   addTree(scene, x + width * 0.05, z - depth * 0.32, 0.55);
 }
 
-export default function TwinScene({ graph, state, beforeState, whatIfState, cascade, viewMode }: Props) {
+export default function TwinScene({ graph, state, beforeState, whatIfState, cascade, viewMode, onSelect, selectedId }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
   const handles = useRef<Handles>({
     edgeMeshes: new Map(),
     edgeBase: new Map(),
@@ -222,6 +258,27 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
     const ro = new ResizeObserver(resize);
     ro.observe(host);
 
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    const pick = (event: PointerEvent) => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const hit = raycaster.intersectObjects(scene.children, true).find((item) => item.object.userData.pickable);
+      if (!hit) {
+        onSelectRef.current?.(null);
+        return;
+      }
+      const object = hit.object;
+      onSelectRef.current?.({
+        id: String(object.userData.entityId),
+        type: String(object.userData.entityType),
+        label: String(object.userData.entityLabel),
+      });
+    };
+    renderer.domElement.addEventListener("pointerdown", pick);
+
     let raf = 0;
     const clock = new THREE.Clock();
     const tick = () => {
@@ -242,6 +299,7 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      renderer.domElement.removeEventListener("pointerdown", pick);
       controls.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === host) host.removeChild(renderer.domElement);
@@ -259,7 +317,11 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
   useEffect(() => {
     const host = hostRef.current as any;
     if (!host?.__chrono || !graph) return;
-    const { scene } = host.__chrono as { scene: THREE.Scene };
+    const { scene, camera, controls } = host.__chrono as {
+      scene: THREE.Scene;
+      camera: THREE.PerspectiveCamera;
+      controls: OrbitControls;
+    };
 
     const stale: THREE.Object3D[] = [];
     scene.traverse((o) => {
@@ -303,6 +365,7 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
       );
       road.castShadow = true;
       road.receiveShadow = true;
+      makePickable(road, "edge", e.id, e.name || e.id);
       handles.current.edgeMeshes.set(e.id, road);
       handles.current.edgeBase.set(e.id, e.length_m / (Math.max(e.free_flow_kph, 1) / 3.6));
 
@@ -371,7 +434,29 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
       }
     }
 
-    // A handful of coherent blocks, parks, and varied towers make the demo feel like a real district.
+    for (const asset of graph.infrastructure ?? []) {
+      const color = asset.kind === "power_line" ? 0xf59e0b : asset.kind === "waterway" ? 0x38bdf8 : 0x60a5fa;
+      const points = asset.geometry.map(([x, y]) => toWorld(x, y));
+      for (let index = 0; index < points.length - 1; index += 1) {
+        const assetMesh = makeStrip(
+          scene,
+          points[index],
+          points[index + 1],
+          asset.kind === "power_line" ? 0.06 : 0.11,
+          0.045,
+          0.2,
+          new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.18, roughness: 0.55 })
+        );
+        makePickable(assetMesh, asset.kind, asset.id, asset.name || asset.id);
+      }
+    }
+
+    // Imported OSM footprints are the primary 3D city geometry. The procedural
+    // skyline remains as a fallback for the built-in demo graph.
+    if (graph.buildings?.length) {
+      graph.buildings.forEach((building) => addImportedBuilding(scene, building));
+    }
+
     const buildingColors = [0x1d2a3a, 0x243449, 0x2c3a4d, 0x1b3445, 0x334155];
     const blocks = [
       [-0.55, -2.45, 1.0, 0.72, 6],
@@ -381,25 +466,27 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
       [5.35, -2.45, 1.1, 0.7, 6],
       [3.0, -0.55, 0.72, 0.48, 4],
     ];
-    let seed = 17;
-    const rnd = () => {
-      seed = (seed * 1664525 + 1013904223) % 4294967296;
-      return seed / 4294967296;
-    };
-    for (const [cx, cz, width, depth, count] of blocks) {
-      for (let i = 0; i < count; i += 1) {
-        const w = 0.24 + rnd() * 0.24;
-        const d = 0.24 + rnd() * 0.24;
-        const h = 0.55 + rnd() * 1.55;
-        const x = cx + (rnd() - 0.5) * width;
-        const z = cz + (rnd() - 0.5) * depth;
-        addBuilding(scene, x, z, w, d, h, buildingColors[Math.floor(rnd() * buildingColors.length)], i + Math.floor(cx * 10));
+    if (!graph.buildings?.length) {
+      let seed = 17;
+      const rnd = () => {
+        seed = (seed * 1664525 + 1013904223) % 4294967296;
+        return seed / 4294967296;
+      };
+      for (const [cx, cz, width, depth, count] of blocks) {
+        for (let i = 0; i < count; i += 1) {
+          const w = 0.24 + rnd() * 0.24;
+          const d = 0.24 + rnd() * 0.24;
+          const h = 0.55 + rnd() * 1.55;
+          const x = cx + (rnd() - 0.5) * width;
+          const z = cz + (rnd() - 0.5) * depth;
+          addBuilding(scene, x, z, w, d, h, buildingColors[Math.floor(rnd() * buildingColors.length)], i + Math.floor(cx * 10));
+        }
       }
+      addPark(scene, -0.55, -0.45, 0.82, 0.58);
+      addPark(scene, 4.9, -0.45, 0.78, 0.58);
+      addTree(scene, 6.45, -1.7, 0.9);
+      addTree(scene, -1.35, -1.0, 0.72);
     }
-    addPark(scene, -0.55, -0.45, 0.82, 0.58);
-    addPark(scene, 4.9, -0.45, 0.78, 0.58);
-    addTree(scene, 6.45, -1.7, 0.9);
-    addTree(scene, -1.35, -1.0, 0.72);
 
     // Nodes and recognizable city services.
     for (const n of graph.nodes) {
@@ -437,6 +524,10 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
         mesh.position.set(x, 0.08, z);
       }
       mesh.castShadow = true;
+      const hospital = graph.hospitals.find((item) => item.node_id === n.id);
+      const entityType = n.kind === "hospital" ? "hospital" : n.kind === "substation" ? "substation" : n.kind;
+      const entityId = hospital?.id ?? graph.substations.find((item) => item.node_id === n.id)?.id ?? n.id;
+      makePickable(mesh, entityType, entityId, n.name || entityId);
       addCity(scene, mesh);
       handles.current.nodeMeshes.set(n.id, mesh);
 
@@ -476,6 +567,21 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
       addCity(scene, stripe);
       handles.current.ambulance = amb;
     }
+
+    const xs = graph.nodes.map((node) => toWorld(node.x, node.y)[0]);
+    const zs = graph.nodes.map((node) => toWorld(node.x, node.y)[1]);
+    const minX = Math.min(...xs, -2);
+    const maxX = Math.max(...xs, 2);
+    const minZ = Math.min(...zs, -2);
+    const maxZ = Math.max(...zs, 2);
+    const centerX = (minX + maxX) / 2;
+    const centerZ = (minZ + maxZ) / 2;
+    const span = Math.max(maxX - minX, maxZ - minZ, 4);
+    controls.target.set(centerX, 0, centerZ);
+    camera.position.set(centerX + span * 1.2, Math.max(5.5, span * 1.45), centerZ + span * 1.2);
+    controls.minDistance = Math.max(3.5, span * 0.55);
+    controls.maxDistance = Math.max(18, span * 5);
+    controls.update();
   }, [graph]);
 
   // ---------- repaint on state / cascade / view-mode change ----------
@@ -507,7 +613,8 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
       if (closed) color = C.closed;
       if (flooded) color = C.flooded;
       mat.color.setHex(color);
-      mat.emissive.setHex(flooded ? 0x0a2a66 : darkEnd ? 0x1a0508 : 0x000000);
+      const selectedEdge = selectedId === mesh.userData.entityId;
+      mat.emissive.setHex(selectedEdge ? 0x075985 : flooded ? 0x0a2a66 : darkEnd ? 0x1a0508 : 0x000000);
       mesh.position.y = flooded ? 0.075 : 0.06;
 
       const water = h.floodMeshes.get(e.id);
@@ -522,7 +629,7 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
       if (n.kind === "junction") {
         mat.color.setHex(isDark ? C.dark : C.junction);
         mat.emissive.setHex(affected.has(n.id) ? 0x4d3c06 : isDark ? 0x2a0508 : 0x000000);
-        const s = affected.has(n.id) ? 1.35 : 1;
+        const s = (affected.has(n.id) ? 1.35 : 1) * (selectedId === mesh.userData.entityId ? 1.3 : 1);
         mesh.scale.set(s, 1, s);
       } else if (n.kind === "hospital") {
         mat.emissive.setHex(affected.has(n.id) ? 0x4d3c06 : 0x0a3d1e);
@@ -543,7 +650,15 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
       const mat = h.ambulance.material as THREE.MeshStandardMaterial;
       mat.emissive.setHex(dispatched ? 0xffb302 : 0x4a4208);
     }
-  }, [graph, snapshot, cascade, viewMode]);
+  }, [graph, snapshot, cascade, viewMode, selectedId]);
 
-  return <div className="twin-host" ref={hostRef} />;
+  return (
+    <div className="twin-host" ref={hostRef}>
+      {graph?.source === "osm" && (
+        <div className="city-attribution">
+          {graph.name ?? "Imported city"} · {graph.attribution ?? "© OpenStreetMap contributors · ODbL"}
+        </div>
+      )}
+    </div>
+  );
 }

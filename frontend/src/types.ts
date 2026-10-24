@@ -17,6 +17,39 @@ export interface CityEdge {
   lanes: number;
   free_flow_kph: number;
   kind: "road" | "underpass" | "feeder";
+  name?: string;
+  tags?: Record<string, string>;
+}
+
+export interface HospitalDepartment {
+  id: string;
+  name: string;
+  total_beds: number;
+  available_beds: number;
+  status: "open" | "limited" | "closed";
+}
+
+export interface HospitalInfo {
+  id: string;
+  node_id: string;
+  name: string;
+  departments: HospitalDepartment[];
+}
+
+export interface MapSelection {
+  id: string;
+  type: string;
+  label: string;
+}
+
+export interface CityBuilding {
+  id: string;
+  name: string;
+  kind: string;
+  footprint: [number, number][];
+  height_m: number;
+  levels?: number | null;
+  tags?: Record<string, string>;
 }
 
 export interface CityGraph {
@@ -25,8 +58,15 @@ export interface CityGraph {
   substations: { id: string; node_id: string; feeders: string[]; capacity_mw: number }[];
   feeders: { id: string; substation_id: string; serves: string[] }[];
   signals: { id: string; node_id: string; feeder_id: string }[];
-  hospitals: { id: string; node_id: string; name: string }[];
+  hospitals: HospitalInfo[];
   underpasses: { id: string; edge_id: string; name: string }[];
+  buildings?: CityBuilding[];
+  infrastructure?: { id: string; kind: string; geometry: [number, number][]; name: string }[];
+  source?: string;
+  source_ref?: string;
+  name?: string;
+  bounds?: Record<string, number>;
+  attribution?: string;
 }
 
 export interface CitySnapshot {

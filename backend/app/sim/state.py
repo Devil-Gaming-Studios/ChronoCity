@@ -13,6 +13,11 @@ def initial_state(graph: CityGraph) -> CitySnapshot:
     snap = CitySnapshot(t=0.0)
     for f in graph.feeders:
         snap.powered[f.id] = True
+    for sub in graph.substations:
+        snap.power_load_mw[sub.id] = round(sub.capacity_mw * 0.65, 2)
+    for asset in graph.infrastructure:
+        if asset.kind in {"pipeline", "waterway", "water_works", "wastewater_plant"}:
+            snap.water_pressure_kpa[asset.id] = 350.0
     for s in graph.signals:
         snap.signals_ok[s.id] = True
     refresh_travel(snap, graph)
@@ -65,6 +70,38 @@ def apply_action(state: CitySnapshot, graph: CityGraph, action: Action) -> CityS
                     for sig in graph.signals:
                         if sig.feeder_id == fid:
                             s.signals_ok[sig.id] = on
+                if on:
+                    s.failed_assets.pop(sid, None)
+                else:
+                    s.failed_assets[sid] = "substation trip"
+        refresh_travel(s, graph)
+
+    elif tool == "power.set_load":
+        sid = p.get("substation_id") or (action.entity_ids[0] if action.entity_ids else "")
+        load = max(0.0, float(p.get("load_mw", 0.0)))
+        s.power_load_mw[sid] = load
+        sub = next((item for item in graph.substations if item.id == sid), None)
+        if sub and load > sub.capacity_mw:
+            s.failed_assets[sid] = "overload"
+            for fid in sub.feeders:
+                s.powered[fid] = False
+                for sig in graph.signals:
+                    if sig.feeder_id == fid:
+                        s.signals_ok[sig.id] = False
+        refresh_travel(s, graph)
+
+    elif tool == "power.break_line":
+        asset_id = str(p.get("asset_id") or (action.entity_ids[0] if action.entity_ids else ""))
+        s.failed_assets[asset_id] = "power line break"
+        sid = p.get("substation_id")
+        if sid:
+            for sub in graph.substations:
+                if sub.id == sid:
+                    for fid in sub.feeders:
+                        s.powered[fid] = False
+                        for sig in graph.signals:
+                            if sig.feeder_id == fid:
+                                s.signals_ok[sig.id] = False
         refresh_travel(s, graph)
 
     elif tool == "power.reroute_feeder":
@@ -118,6 +155,26 @@ def apply_action(state: CitySnapshot, graph: CityGraph, action: Action) -> CityS
         for sid in p.get("signal_ids", action.entity_ids):
             s.signals_ok[sid] = False
         refresh_travel(s, graph)
+
+    elif tool == "water.break_pipe":
+        asset_id = str(p.get("asset_id") or (action.entity_ids[0] if action.entity_ids else ""))
+        s.water_failures[asset_id] = "pipe break"
+        s.failed_assets[asset_id] = "pipe break"
+        s.water_pressure_kpa[asset_id] = 0.0
+
+    elif tool == "water.set_pressure":
+        asset_id = str(p.get("asset_id") or (action.entity_ids[0] if action.entity_ids else ""))
+        pressure = max(0.0, float(p.get("pressure_kpa", 0.0)))
+        s.water_pressure_kpa[asset_id] = pressure
+        if pressure < 20.0:
+            s.water_failures[asset_id] = "low pressure"
+            s.failed_assets[asset_id] = "low pressure"
+
+    elif tool == "water.repair_pipe":
+        asset_id = str(p.get("asset_id") or (action.entity_ids[0] if action.entity_ids else ""))
+        s.water_failures.pop(asset_id, None)
+        s.failed_assets.pop(asset_id, None)
+        s.water_pressure_kpa[asset_id] = 350.0
 
     elif tool == "emergency.dispatch":
         amb = p.get("ambulance_id", "A1")

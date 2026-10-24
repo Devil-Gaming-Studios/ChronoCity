@@ -112,6 +112,7 @@ code {
 }
 
 .twin-host {
+  position: relative;
   flex: 1;
   min-height: 0;
   border: 1px solid var(--line);
@@ -120,8 +121,101 @@ code {
   background: var(--bg);
 }
 
+.city-attribution {
+  position: absolute;
+  z-index: 2;
+  left: 10px;
+  bottom: 8px;
+  max-width: calc(100% - 20px);
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: rgba(11, 14, 20, 0.78);
+  color: var(--muted);
+  font-size: 10px;
+  pointer-events: none;
+}
+
 .twin-host canvas {
   display: block;
+}
+
+/* ---------- interactive controls ---------- */
+
+.panel-controls {
+  flex: 0 0 auto;
+  max-height: 54vh;
+}
+
+.control-help,
+.command-examples,
+.source-note {
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.selection-card,
+.hospital-card,
+.diagnostic-card,
+.command-card,
+.control-result {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-top: 8px;
+  background: var(--panel-2);
+}
+
+.selection-card h4,
+.hospital-card h4,
+.diagnostic-card h4,
+.command-card h4 {
+  margin-top: 0;
+}
+
+.selected-title {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.compact {
+  margin: 8px 0 0;
+  flex-wrap: wrap;
+}
+
+.department-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.command-row {
+  display: flex;
+  gap: 6px;
+}
+
+.command-input {
+  min-width: 0;
+  flex: 1;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 8px;
+  font: inherit;
+}
+
+.command-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.control-result {
+  display: grid;
+  gap: 4px;
+  border-color: #155e75;
 }
 
 /* ---------- panels ---------- */

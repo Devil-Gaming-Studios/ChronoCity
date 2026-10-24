@@ -10,12 +10,15 @@ import type {
   Incident,
   JointPlan,
   Metrics,
+  HospitalInfo,
+  MapSelection,
 } from "./types";
 import TwinScene, { type ViewMode } from "./components/TwinScene";
 import IncidentPanel from "./components/IncidentPanel";
 import PlanPanel from "./components/PlanPanel";
 import ChatterPanel from "./components/ChatterPanel";
 import TimelineBar from "./components/TimelineBar";
+import ControlPanel from "./components/ControlPanel";
 
 export default function App() {
   const [graph, setGraph] = useState<CityGraph | null>(null);
@@ -31,6 +34,13 @@ export default function App() {
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [verifiedAt, setVerifiedAt] = useState<number | null>(null);
   const [criticIterations, setCriticIterations] = useState(0);
+  const [selection, setSelection] = useState<MapSelection | null>(null);
+  const [selectedHospital, setSelectedHospital] = useState<HospitalInfo | null>(null);
+  const [diagnostics, setDiagnostics] = useState<Record<string, unknown> | null>(null);
+  const [commandText, setCommandText] = useState("");
+  const [commandBusy, setCommandBusy] = useState(false);
+  const [commandResult, setCommandResult] = useState<Record<string, unknown> | null>(null);
+  const [routeResult, setRouteResult] = useState<Record<string, unknown> | null>(null);
 
   const refreshIncidents = useCallback(async () => {
     try {
@@ -86,6 +96,11 @@ export default function App() {
           setRunning(false);
           refreshAll();
           break;
+        case "city_loaded":
+          api.city().then(setGraph).catch(() => undefined);
+          refreshIncidents();
+          refreshMetrics();
+          break;
         case "executed":
         case "incident":
           refreshIncidents();
@@ -107,6 +122,92 @@ export default function App() {
       .catch(() => undefined);
     refreshAll();
   }, [refreshAll]);
+
+  const selectEntity = useCallback(async (next: MapSelection | null) => {
+    setSelection(next);
+    setSelectedHospital(null);
+    setDiagnostics(null);
+    setRouteResult(null);
+    if (!next) return;
+    if (next.type === "hospital") {
+      try {
+        setSelectedHospital(await api.hospital(next.id));
+      } catch {
+        /* hospital details are optional for imported maps */
+      }
+    } else if (next.type === "substation") {
+      try {
+        setDiagnostics(await api.diagnostics("power"));
+      } catch {
+        /* backend offline */
+      }
+    } else if (["pipeline", "waterway", "water_works", "wastewater_plant"].includes(next.type)) {
+      try {
+        setDiagnostics(await api.diagnostics("water"));
+      } catch {
+        /* backend offline */
+      }
+    }
+  }, []);
+
+  const applyPreview = async (hazards: Array<Record<string, unknown>>, label: string) => {
+    try {
+      const result = await api.runSimulation({ label, start_from: "current", hazards });
+      setCommandResult(result);
+      const after = result.after_state as CitySnapshot | undefined;
+      if (after) {
+        setWhatIfState(after);
+        setViewMode("whatif");
+      }
+    } catch (error) {
+      setCommandResult({ answer: error instanceof Error ? error.message : "Simulation failed" });
+    }
+  };
+
+  const previewSelection = () => {
+    if (!selection) return;
+    if (selection.type === "edge") void applyPreview([{ type: "close_edge", edge_id: selection.id }], `Disable ${selection.label}`);
+    else if (selection.type === "substation") void applyPreview([{ type: "power_outage", substation_id: selection.id }], `Trip ${selection.label}`);
+    else if (selection.type === "power_line") void applyPreview([{ type: "power_wire_break", asset_id: selection.id }], `Break ${selection.label}`);
+    else if (["pipeline", "waterway", "water_works", "wastewater_plant"].includes(selection.type)) void applyPreview([{ type: "water_pipe_break", asset_id: selection.id }], `Break ${selection.label}`);
+  };
+
+  const runCommand = async () => {
+    if (!commandText.trim()) return;
+    setCommandBusy(true);
+    try {
+      const result = await api.runCommand({
+        text: commandText,
+        start_from: "current",
+        selected_entity_id: selection?.id,
+        selected_entity_type: selection?.type,
+      });
+      setCommandResult(result);
+      const after = result.after_state as CitySnapshot | undefined;
+      if (after) {
+        setWhatIfState(after);
+        setViewMode("whatif");
+      }
+    } finally {
+      setCommandBusy(false);
+    }
+  };
+
+  const routeVehicle = async (vehicleType: "firetruck" | "police" | "ambulance") => {
+    if (!selection) return;
+    const body: { vehicle_type: typeof vehicleType; hospital_id?: string; destination_node?: string; incident_edge_id?: string } = { vehicle_type: vehicleType };
+    if (selection.type === "hospital") body.hospital_id = selection.id;
+    else if (selection.type === "edge") {
+      const edge = graph?.edges.find((item) => item.id === selection.id);
+      body.destination_node = edge?.src;
+      body.incident_edge_id = selection.id;
+    } else body.destination_node = selection.id;
+    try {
+      setRouteResult(await api.vehicleRoute(body));
+    } catch (error) {
+      setRouteResult({ answer: error instanceof Error ? error.message : "Route calculation failed" });
+    }
+  };
 
   // ---- controls ----
   const start = async (mode: "combined" | "flood" | "trip") => {
@@ -199,9 +300,25 @@ export default function App() {
             whatIfState={whatIfState}
             cascade={cascade}
             viewMode={viewMode}
+            onSelect={selectEntity}
+            selectedId={selection?.id}
           />
         </div>
         <div className="col col-right">
+          <ControlPanel
+            graph={graph}
+            selection={selection}
+            hospital={selectedHospital}
+            diagnostics={diagnostics}
+            commandText={commandText}
+            commandBusy={commandBusy}
+            commandResult={commandResult}
+            routeResult={routeResult}
+            setCommandText={setCommandText}
+            onCommand={runCommand}
+            onPreviewSelection={previewSelection}
+            onRoute={routeVehicle}
+          />
           <PlanPanel plan={plan} onAction={refreshAll} />
         </div>
       </main>
