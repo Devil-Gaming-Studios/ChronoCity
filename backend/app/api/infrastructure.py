@@ -55,10 +55,10 @@ async def infrastructure_diagnostics(request: Request, domain: Literal["power", 
                 "utilization": round(utilization, 3),
                 "feeders": feeders,
                 "dark_signals": dark_signals,
-                "recommended_actions": [
+                "recommended_actions": [item for item in [
                     "inspect upstream line and breaker" if status in {"offline", "overloaded"} else "continue monitoring",
-                    "reroute critical loads before dispatching repair crews" if dark_signals else "",
-                ],
+                    "reroute critical loads before dispatching repair crews" if dark_signals else None,
+                ] if item],
             })
         probable = sorted(stations, key=lambda item: (item["status"] == "healthy", -item["utilization"]))
         return {

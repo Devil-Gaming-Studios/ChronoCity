@@ -140,6 +140,9 @@ def _explain(graph, hazards: list[HazardRequest], before, after, result) -> tupl
         explanations.append(f"{len(blocked)} edge(s) are blocked after the hazards and mitigation actions.")
     if dark_signal_ids:
         explanations.append(f"{len(dark_signal_ids)} signal(s) remain offline, so affected roads receive a congestion penalty.")
+    failed_assets = sorted(set(after.failed_assets) | set(after.water_failures))
+    if failed_assets:
+        explanations.append(f"{len(failed_assets)} infrastructure asset(s) are failed or degraded: {', '.join(failed_assets)}.")
     if result.notes:
         explanations.extend(result.notes)
     if not explanations:
@@ -147,7 +150,7 @@ def _explain(graph, hazards: list[HazardRequest], before, after, result) -> tupl
 
     summary = (
         f"Simulation complete: {len(blocked)} blocked edge(s), {len(dark_signal_ids)} dark signal(s), "
-        f"and {len(affected_nodes)} affected node(s)."
+        f"{len(failed_assets)} failed asset(s), and {len(affected_nodes)} affected node(s)."
     )
     return summary, explanations, sorted(affected_nodes)
 
@@ -188,6 +191,7 @@ async def run_simulation(body: SimulationRequest, request: Request) -> dict[str,
 
         after = CitySnapshot.model_validate(result.final_state)
     summary, explanations, affected_nodes = _explain(graph, body.hazards, base, after, result)
+    affected_assets = sorted(set(after.failed_assets) | set(after.water_failures))
     response = {
         "ok": True,
         "city": {"name": graph.name, "source": graph.source, "source_ref": graph.source_ref},
@@ -195,6 +199,7 @@ async def run_simulation(body: SimulationRequest, request: Request) -> dict[str,
         "answer": summary,
         "explanation": explanations,
         "affected_nodes": affected_nodes,
+        "affected_assets": affected_assets,
         "hazards": [hazard.model_dump() for hazard in body.hazards],
         "actions": [action.model_dump() for action in body.actions],
         "result": result.model_dump(),

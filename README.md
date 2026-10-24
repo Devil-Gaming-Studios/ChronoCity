@@ -197,10 +197,52 @@ curl -X POST http://localhost:8000/api/simulations/run \
 
 The response includes an `answer`, an `explanation` list, affected nodes, before/after snapshots, blocked edges, and a trace. That makes the service usable without depending on an LLM to explain the physical result.
 
+### Power, water, hospitals, and emergency vehicles
+
+The service now exposes the same active city graph to domain diagnostics and emergency routing:
+
+```bash
+# Identify the likely failing electrical station
+curl "http://localhost:8000/api/infrastructure/diagnostics?domain=power"
+
+# Inspect mapped water assets and pressure/failure state
+curl "http://localhost:8000/api/infrastructure/diagnostics?domain=water"
+
+# Hospital departments and available beds
+curl http://localhost:8000/api/hospitals
+curl http://localhost:8000/api/hospitals/H1
+
+# Smart route for firetruck, police, or ambulance
+curl -X POST http://localhost:8000/api/routes/vehicles \
+  -H "Content-Type: application/json" \
+  -d '{"vehicle_type":"firetruck","origin":"DEPOT","hospital_id":"H1"}'
+```
+
+The 3D map marks hospitals as separate selectable assets. Selecting a hospital shows department-level bed availability. Selecting a road, substation, power line, or water asset provides a safe **Preview disable in What-if** action rather than silently mutating the live twin.
+
+### Chat-style scenario commands
+
+The right-side **Scenario command** box accepts deterministic commands without requiring an LLM:
+
+```bash
+curl -X POST http://localhost:8000/api/commands/run \
+  -H "Content-Type: application/json" \
+  -d '{"text":"rain 120 mm","start_from":"current"}'
+
+# Other examples:
+# set substation S2 load to 45 MW
+# trip substation S2
+# break wire ASSET_ID
+# break pipe ASSET_ID
+# disable selected feature
+```
+
+These commands produce a What-if result with a plain-language answer, explanations, affected entities, and before/after state. They do not bypass the approval workflow for live actions.
+
 ### What is and is not modeled yet
 
-- **Implemented:** topology-driven road travel times, flooded/closed edge blocking, signal-dark congestion penalties, OSM road/building import, and local 3D building extrusion.
-- **Preserved for extension:** OSM power lines, waterways, and pipelines are returned as infrastructure assets.
+- **Implemented:** topology-driven road travel times, flooded/closed edge blocking, signal-dark congestion penalties, OSM road/building import, local 3D building extrusion, power overload/station diagnostics, water pressure/pipe-break state, hospital department capacity, and firetruck/police/ambulance routing.
+- **Preserved for extension:** OSM power lines, waterways, and pipelines are returned as infrastructure assets and can be selected or failed in What-if simulations.
 - **Not invented:** if a city does not map its electrical feeders, pipes, sensors, elevations, or building heights in OSM, the simulator does not pretend those details exist.
 - **Next production layer:** attach authoritative utility GIS/SCADA/IoT feeds and domain solvers for hydraulics, electrical load flow, drainage, terrain, and sensor calibration.
 
