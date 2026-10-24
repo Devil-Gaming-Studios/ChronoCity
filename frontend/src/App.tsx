@@ -17,11 +17,13 @@ import type {
 } from "./types";
 import TwinScene, { type ViewMode } from "./components/TwinScene";
 import IncidentPanel from "./components/IncidentPanel";
-import PlanPanel from "./components/PlanPanel";
 import ChatterPanel from "./components/ChatterPanel";
 import TimelineBar from "./components/TimelineBar";
 import ControlPanel from "./components/ControlPanel";
 import SimulationPanel from "./components/SimulationPanel";
+import ComplaintsPanel from "./components/ComplaintsPanel";
+import OperatorDashboard from "./components/OperatorDashboard";
+import type { CommunityState } from "./types";
 
 export default function App() {
   const [graph, setGraph] = useState<CityGraph | null>(null);
@@ -47,8 +49,9 @@ export default function App() {
   const [powerResponse, setPowerResponse] = useState<{ key: string; result: PowerDiagnostics } | null>(null);
   const [routeConfig, setRouteConfig] = useState<RouteRequest | null>(null);
   const [selectedItems, setSelectedItems] = useState<MapSelection[]>([]);
-  const [approvalBusy, setApprovalBusy] = useState(false);
   const [layers, setLayers] = useState({ power: true, traffic: true, emergency: true, reports: true });
+  const [surface, setSurface] = useState<"city" | "operator">("city");
+  const [community, setCommunity] = useState<CommunityState | null>(null);
 
   const refreshIncidents = useCallback(async () => {
     try {
@@ -81,6 +84,7 @@ export default function App() {
     void refreshIncidents();
     void refreshPlan();
     void refreshMetrics();
+    void api.communityState().then(setCommunity).catch(() => undefined);
   }, [refreshIncidents, refreshPlan, refreshMetrics]);
 
   // ---- WebSocket-driven updates ----
@@ -111,6 +115,10 @@ export default function App() {
           refreshMetrics();
           break;
         case "executed":
+        case "plan_edited":
+        case "manual_plan":
+          refreshAll();
+          break;
         case "incident":
           refreshIncidents();
           refreshMetrics();
@@ -245,23 +253,6 @@ export default function App() {
 
   const quickCommand = (text: string) => { void runCommand(text); };
 
-  const respondToApproval = async (approved: boolean) => {
-    if (!plan) return;
-    setApprovalBusy(true);
-    try {
-      const result = await api.approve(plan.id, approved, approved ? "Approved from agent chat" : "Rejected from agent chat");
-      if (result?.ok === false) {
-        throw new Error(String(result.error ?? "Approval request failed."));
-      }
-      await refreshPlan();
-      setCommandResult({ answer: approved ? "Plan approved. Execute it from the plan panel when ready." : "Plan rejected. No actions were executed." });
-    } catch (error) {
-      setCommandResult({ answer: error instanceof Error ? error.message : "Approval request failed." });
-    } finally {
-      setApprovalBusy(false);
-    }
-  };
-
   const calculateRoute = (vehicleType: RouteRequest["vehicle_type"]) => {
     const origin = routeConfig?.origin ?? graph?.nodes.find((node) => node.kind === "depot")?.id;
     const destination = selection?.type === "hospital"
@@ -285,6 +276,20 @@ export default function App() {
     } finally {
       setCommandBusy(false);
     }
+  };
+
+  const submitComplaint = async (body: { zone: string; category: "flood" | "blackout" | "pipe_leak" | "traffic"; text: string; count: number; state?: CitySnapshot | null }) => {
+    const result = await api.submitComplaint(body);
+    setCommunity(await api.communityState());
+    setCommandResult(result);
+  };
+
+  const previewPipeline = async (assetId: string, pressure: number) => {
+    if (!Number.isFinite(pressure) || pressure < 0 || pressure > 1000) throw new Error("Pressure must be between 0 and 1000 kPa.");
+    const result = await api.pipelinePreview({ asset_id: assetId, pressure_kpa: pressure, base_state: displayedState });
+    setWhatIfState(result.after_state as CitySnapshot);
+    setViewMode("whatif");
+    setCommandResult(result);
   };
 
   // ---- controls ----
@@ -363,17 +368,19 @@ export default function App() {
         <span className={`conn ${socket.connected ? "on" : "off"}`}>
           {socket.connected ? "LIVE" : "OFFLINE"}
         </span>
+        <button className={`btn btn-toggle ${surface === "city" ? "active" : ""}`} onClick={() => setSurface("city")}>City Simulation</button>
+        <button className={`btn btn-toggle ${surface === "operator" ? "active" : ""}`} onClick={() => setSurface("operator")}>Operator Dashboard</button>
       </header>
 
-      <div className="layer-toolbar">
+      {surface === "city" && <div className="layer-toolbar">
         <span className="muted">Layers</span>
         {(Object.keys(layers) as Array<keyof typeof layers>).map((layer) => (
           <button key={layer} className={`btn btn-toggle ${layers[layer] ? "active" : ""}`} onClick={() => setLayers((current) => ({ ...current, [layer]: !current[layer] }))}>
             {layer[0].toUpperCase() + layer.slice(1)}
           </button>
         ))}
-      </div>
-      <main className="app-main">
+      </div>}
+      {surface === "operator" ? <OperatorDashboard onRefresh={refreshAll} /> : <main className="app-main">
         <div className="col col-left">
           <IncidentPanel incidents={incidents} cascade={cascade} />
           <ChatterPanel
@@ -385,9 +392,7 @@ export default function App() {
             commandBusy={commandBusy}
             setCommandText={setCommandText}
             onCommand={(text) => void runCommand(text)}
-            approvalBusy={approvalBusy}
-            onApprove={() => void respondToApproval(true)}
-            onReject={() => void respondToApproval(false)}
+            onOpenOperator={() => setSurface("operator")}
           />
         </div>
         <div className="col col-center">
@@ -399,8 +404,14 @@ export default function App() {
             cascade={cascade}
             viewMode={viewMode}
             onSelect={selectEntity}
+            selection={selection}
             selectedId={selection?.id}
             routeResult={routeResult}
+            powerDiagnostics={power}
+            busy={commandBusy}
+            onPreview={previewHazards}
+            onPipelinePreview={previewPipeline}
+            onPreviewSelection={previewSelection}
             selectedIds={selectedItems.map((item) => item.id)}
             outageNodeIds={power?.affected_nodes ?? []}
             layers={layers}
@@ -411,6 +422,7 @@ export default function App() {
             busy={commandBusy} onPreview={previewHazards} power={power} routeConfig={routeConfig}
             onRouteChange={setRouteConfig} routeResult={routeResult} viewMode={viewMode}
             onClearPreview={() => { setWhatIfState(null); setViewMode("present"); }} />
+          <ComplaintsPanel graph={graph} state={viewMode === "present" ? null : displayedState} community={community} busy={commandBusy} onSubmit={submitComplaint} />
           <ControlPanel
             graph={graph}
             selection={selection}
@@ -421,9 +433,9 @@ export default function App() {
             onPreviewSelection={previewSelection}
              onRoute={calculateRoute}
           />
-          <PlanPanel plan={plan} onAction={refreshAll} />
+          <button className="btn btn-primary" onClick={() => setSurface("operator")}>Review plans &amp; audit history in Operator Dashboard</button>
         </div>
-      </main>
+      </main>}
 
       <TimelineBar
         onStart={start}

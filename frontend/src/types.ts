@@ -55,6 +55,7 @@ export interface PowerDiagnostics {
     generation_mw: number;
     output_mw: number;
     load_mw: number;
+    reserve_mw: number;
     capacity_mw: number;
     status: string;
   }>;
@@ -110,6 +111,9 @@ export interface CitySnapshot {
   power_load_mw: Record<string, number>;
   power_generation_mw: Record<string, number>;
   failed_assets: Record<string, string>;
+  water_pressure_kpa?: Record<string, number>;
+  water_failures?: Record<string, string>;
+  water_isolated?: Record<string, boolean>;
   vehicles: Record<string, string>;
   ambulances: Record<string, Record<string, unknown>>;
   shelters?: Record<string, Record<string, unknown>>;
@@ -141,7 +145,7 @@ export interface Conflict {
 export interface Proposal {
   id?: string;
   agent: string;
-  domain: "power" | "traffic" | "emergency";
+  domain: "power" | "traffic" | "emergency" | "water";
   incident_ids?: string[];
   summary: string;
   actions: Action[] | number; // /plans/current gives full actions; /plans gives a count
@@ -176,6 +180,33 @@ export interface ActionLogEntry {
   ok: boolean;
   detail: string;
   ts: number;
+}
+
+export interface AuditEvent {
+  id: number;
+  ts: number;
+  runtime_id: string;
+  city: string;
+  kind: string;
+  scope: string;
+  actor: string;
+  plan_id: string;
+  summary: string;
+  payload: Record<string, unknown>;
+}
+
+export interface AuditPage {
+  items: AuditEvent[];
+  total: number;
+  next_before: number | null;
+  kinds: string[];
+  storage: string;
+  runtime_id: string;
+}
+
+export interface SavedPlans {
+  items: Array<{ runtime_id: string; updated: number; plan: JointPlan; actionable: boolean }>;
+  total: number;
 }
 
 export interface Incident {

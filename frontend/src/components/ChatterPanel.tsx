@@ -10,9 +10,7 @@ interface Props {
   commandBusy: boolean;
   setCommandText: (value: string) => void;
   onCommand: (text?: string) => void;
-  approvalBusy?: boolean;
-  onApprove?: () => void;
-  onReject?: () => void;
+  onOpenOperator?: () => void;
 }
 
 const KIND_ICON: Record<string, string> = {
@@ -60,9 +58,7 @@ export default function ChatterPanel({
   commandBusy,
   setCommandText,
   onCommand,
-  approvalBusy = false,
-  onApprove,
-  onReject,
+  onOpenOperator,
 }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
   const shown = events.filter((event) => !NOISY.has(event.kind)).slice(-60);
@@ -95,10 +91,9 @@ export default function ChatterPanel({
         {plan?.status === "PENDING_APPROVAL" && (
           <div className="chat-approval-card">
             <strong>This response needs your approval</strong>
-            <p className="muted">Review the plain-language plan on the right, then approve or reject it here.</p>
+            <p className="muted">Review, approve or reject the response in the Operator Dashboard. No actions have been applied.</p>
             <div className="btn-row compact">
-              <button className="btn btn-primary" disabled={approvalBusy} onClick={onApprove}>{approvalBusy ? "Sending…" : "Approve response"}</button>
-              <button className="btn btn-danger" disabled={approvalBusy} onClick={onReject}>Reject</button>
+              <button className="btn btn-primary" onClick={onOpenOperator}>Open operator review</button>
             </div>
           </div>
         )}

@@ -1,4 +1,3 @@
-import { useState } from "react";
 import type { CityGraph, HospitalInfo, MapSelection } from "../types";
 
 interface Props {
@@ -37,17 +36,13 @@ export default function ControlPanel({
 }: Props) {
   const station = diagnostics?.probable_station as Record<string, unknown> | undefined;
   const stations = Array.isArray(diagnostics?.stations) ? diagnostics.stations as Record<string, unknown>[] : [];
-  const selectedStation = selection?.type === "substation"
-    ? stations.find((item) => String(item.substation_id) === selection.id)
-    : undefined;
-  const [powerValue, setPowerValue] = useState("30");
   const routeAnswer = String(routeResult?.answer ?? "");
   const route = routeResult?.route as { reachable?: boolean } | undefined;
   const selectedEdge = selection && ["edge", "underpass"].includes(selection.type)
     ? graph?.edges.find((edge) => edge.id === selection.id)
     : null;
   const selectedAsset = selection && graph?.infrastructure?.find((asset) => asset.id === selection.id);
-  const canPreview = Boolean(selection && ["edge", "underpass", "substation", "power_line", "pipeline", "waterway", "water_works", "wastewater_plant"].includes(selection.type));
+  const canPreview = Boolean(selection && ["edge", "underpass", "power_line"].includes(selection.type));
 
   return (
     <section className="panel panel-controls">
@@ -81,23 +76,9 @@ export default function ControlPanel({
                   <button className="btn" onClick={() => onQuickCommand("flood the selected road")}>Flood road</button>
                 </div>
               )}
-              {selection.type === "power_line" && <button className="btn btn-warn" onClick={() => onQuickCommand("break the selected power line")}>Break power line</button>}
-              {["pipeline", "waterway", "water_works", "wastewater_plant"].includes(selection.type) && <button className="btn btn-warn" onClick={() => onQuickCommand("break the selected water pipe")}>Break water pipe</button>}
-              {canPreview && <button className="btn btn-warn" onClick={onPreviewSelection}>Preview disable</button>}
-
-              {selection.type === "substation" && selectedStation && (
-                <div className="power-controls">
-                  <div className="power-readings">
-                    <div><span className="muted">Output:</span> {String(selectedStation.output_mw)} MW</div>
-                    <div><span className="muted">Load:</span> {String(selectedStation.load_mw)} MW</div>
-                    <div><span className="muted">Reserve:</span> {String(selectedStation.reserve_mw)} MW</div>
-                  </div>
-                  <div className="command-row">
-                    <input className="command-input" type="number" min="0" value={powerValue} onChange={(event) => setPowerValue(event.target.value)} inputMode="decimal" aria-label="Power MW" />
-                    <button className="btn btn-warn" onClick={() => onQuickCommand(`set station ${selection.id} generation to ${powerValue} MW`)}>Set generation</button>
-                    <button className="btn" onClick={() => onQuickCommand(`set station ${selection.id} load to ${powerValue} MW`)}>Set load</button>
-                  </div>
-                </div>
+               {canPreview && <button className="btn btn-warn" onClick={onPreviewSelection}>Preview disable</button>}
+              {(selection.type === "substation" || selection.type === "pipeline") && (
+                <p className="floating-card-hint">Use the floating control card above the selected structure to edit readings or disable the asset.</p>
               )}
 
               {(selection.type === "hospital" || selection.type === "edge" || selection.type === "underpass") && (

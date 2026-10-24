@@ -17,7 +17,7 @@ from .critic import Critic, revise_plan
 from .llm import get_llm
 from .negotiator import Negotiator
 from .orchestrator import Orchestrator
-from .specialists import EmergencyAgent, PowerAgent, TrafficAgent
+from .specialists import EmergencyAgent, PowerAgent, TrafficAgent, WaterAgent
 
 
 Broadcast = Callable[[str, dict[str, Any]], Awaitable[None]]
@@ -39,7 +39,7 @@ class Workflow:
         self.toolbox = PlanToolbox(graph)
         self.negotiator = Negotiator()
         self.critic = Critic(graph)
-        self.specialists = [PowerAgent(graph), TrafficAgent(graph), EmergencyAgent(graph)]
+        self.specialists = [PowerAgent(graph), TrafficAgent(graph), EmergencyAgent(graph), WaterAgent(graph)]
         self.revision_limit = 3
 
     # ------------------------------------------------ stage 1: detect
@@ -65,7 +65,8 @@ class Workflow:
     async def plan(self, broadcast: Broadcast | None = None) -> JointPlan:
         import time
         self.orch.plan_started_ts = time.time()
-        incidents = self.orch.open_incidents()
+        incidents = [i for i in self.orch.open_incidents() if not i.watch_only]
+        context = self.context_fingerprint()
         incident_ids = [i.id for i in incidents]
         llm = get_llm()
         llm.reset_budget()
@@ -80,10 +81,12 @@ class Workflow:
             *(s.run(self.orch.state, incidents) for s in self.specialists)
         )
         proposals = [p for p in proposals if p.actions]
+        plan = self.toolbox.build_joint_plan(proposals, incident_ids)
+        self.orch.save_plan(plan, "Specialist proposals submitted for negotiation")
         for p in proposals:
             self.orch.log(
                 ActionLogEntry(
-                    plan_id="pending",
+                    plan_id=plan.id,
                     tool=f"{p.domain}.propose",
                     phase="propose",
                     actor=p.agent,
@@ -91,14 +94,14 @@ class Workflow:
                 )
             )
             for read_call in p.read_calls:
-                self.orch.log(ActionLogEntry(plan_id="pending", tool=read_call, phase="propose", actor=p.agent, detail="read tool call", impact="LOW"))
+                self.orch.log(ActionLogEntry(plan_id=plan.id, tool=read_call, phase="propose", actor=p.agent, detail="read tool call", impact=Impact.LOW))
 
-        plan = self.toolbox.build_joint_plan(proposals, incident_ids)
         if broadcast:
             await broadcast("plan", {"plan_id": plan.id, "actions": len(plan.actions), "conflicts": len(plan.conflicts)})
 
         # ------------------------------------------------ stage 3: negotiate
         plan = self.negotiator.resolve(plan)
+        self.orch.save_plan(plan, "Negotiator reconciled specialist proposals")
         self.orch.log(
             ActionLogEntry(plan_id=plan.id, tool="negotiator.resolve", phase="propose", actor="negotiator",
                            ok=True, detail=plan.resolution)
@@ -109,6 +112,7 @@ class Workflow:
         # ------------------------------------------------ stage 4: verify (critic loop)
         iteration = 0
         result = self.critic.verify(plan, baseline=self.orch.baseline, start_state=self.orch.state)
+        self.orch.save_plan(plan, "Critic safety verdict for initial response")
         if broadcast:
             await broadcast("critic", {
                 "plan_id": plan.id, "iteration": iteration,
@@ -121,6 +125,7 @@ class Workflow:
             plan.conflicts = find_conflicts(plan)
             plan = self.negotiator.resolve(plan)
             result = self.critic.verify(plan, baseline=self.orch.baseline, start_state=self.orch.state)
+            self.orch.save_plan(plan, f"Critic safety verdict for revision {plan.version}")
             if broadcast:
                 await broadcast("critic", {
                     "plan_id": plan.id, "iteration": iteration,
@@ -133,19 +138,23 @@ class Workflow:
                            ok=result.passed, detail=plan.critic_feedback)
         )
 
-        if result.passed and has_high_impact(plan):
+        if result.passed:
             plan.status = PlanStatus.PENDING_APPROVAL
-        elif result.passed:
-            plan.status = PlanStatus.VERIFIED
+
+        if context != self.context_fingerprint():
+            plan.status = PlanStatus.FAILED
+            plan.critic_feedback += " City changed during planning; generate a fresh plan."
 
         self.orch.current_plan = plan
         self.orch.plan_history.append(plan)
         self.orch.last_plan_duration_s = time.time() - (self.orch.plan_started_ts or time.time())
         plan.metrics["time_to_plan_s"] = round(self.orch.last_plan_duration_s, 3)
+        self.orch.plan_contexts[plan.id] = self.context_fingerprint(plan)
+        self.orch.save_plan(plan, "Agent response ready for operator review")
         if broadcast:
             await broadcast("verified", {
                 "plan_id": plan.id, "passed": result.passed, "status": plan.status.value,
-                "metrics": plan.metrics, "needs_high_approval": has_high_impact(plan) and result.passed,
+                "metrics": plan.metrics, "needs_high_approval": plan.status == PlanStatus.PENDING_APPROVAL,
             })
         return plan
 
@@ -155,14 +164,21 @@ class Workflow:
         plan = self._find_plan(plan_id)
         if plan is None:
             return {"ok": False, "error": "plan_not_found"}
-        if plan.status not in (PlanStatus.PENDING_APPROVAL, PlanStatus.VERIFIED):
+        allowed = {PlanStatus.PENDING_APPROVAL, PlanStatus.VERIFIED}
+        if not approved:
+            allowed.add(PlanStatus.APPROVED)
+        if plan.status not in allowed:
             return {"ok": False, "error": f"plan in status {plan.status.value}, not approvable"}
+        if approved and self.orch.plan_contexts.get(plan.id) != self.context_fingerprint(plan):
+            return {"ok": False, "error": "stale_plan_generate_again"}
         rec = self.orch.approve(plan, approver=approver, note=note, approved=approved)
         if not approved:
             plan.status = PlanStatus.FAILED
+            self.orch.save_plan(plan, "Operator rejected the response; no actions executed")
             return {"ok": True, "approved": False, "plan_id": plan.id}
         if plan.status != PlanStatus.APPROVED:
             plan.status = PlanStatus.APPROVED
+        self.orch.save_plan(plan, "Operator approved the response; execution is a separate step")
         return {"ok": True, "approved": True, "plan_id": plan.id, "approval_id": rec.id}
 
     # ------------------------------------------------ stage 6: execute
@@ -176,16 +192,22 @@ class Workflow:
             return {"ok": False, "error": "plan_not_found"}
 
         if plan.status != PlanStatus.APPROVED:
-            # guard: HIGH-impact plan that skipped approval is refused
-            if has_high_impact(plan):
-                self.orch.log(ActionLogEntry(plan_id=plan.id, tool="execute", phase="approve",
-                                             actor="system", ok=False, detail="HIGH-impact without approval"))
-                return {"ok": False, "error": "approval_required"}
-            plan.status = PlanStatus.APPROVED
+            self.orch.log(ActionLogEntry(plan_id=plan.id, tool="execute", phase="approve",
+                                         actor="system", ok=False, detail=f"Execution refused: {plan.status.value}"))
+            return {"ok": False, "error": "approval_required"}
+        if self.orch.plan_contexts.get(plan.id) != self.context_fingerprint(plan):
+            self.orch.log(ActionLogEntry(plan_id=plan.id, tool="execute", phase="execute",
+                                         actor="system", ok=False, detail="City or plan changed since verification"))
+            return {"ok": False, "error": "stale_plan_generate_again"}
+
+        # Persist intent before mutation. A database failure must not silently
+        # apply unrecorded actions. Runtime state is only installed as one batch.
+        self.orch._emit("execution_started", {"plan_id": plan.id, "version": plan.version})
+        after = self.orch.state.model_copy(deep=True)
 
         executed = 0
         for a in plan.actions:
-            self.orch.state = apply_action(self.orch.state, self.graph, a)
+            after = apply_action(after, self.graph, a)
             self.orch.log(
                 ActionLogEntry(
                     plan_id=plan.id, action_id=a.id, tool=a.tool, phase="execute",
@@ -194,7 +216,9 @@ class Workflow:
             )
             executed += 1
 
+        self.orch.state = after
         plan.status = PlanStatus.EXECUTED
+        self.orch.save_plan(plan, "Approved response applied to the simulated live city")
         # resolve the incidents this plan addressed
         for inc in self.orch.incidents:
             if inc.id in plan.incident_ids:
@@ -203,6 +227,20 @@ class Workflow:
         return {"ok": True, "executed": executed, "plan_id": plan.id}
 
     # ------------------------------------------------ helpers
+
+    def context_fingerprint(self, plan: JointPlan | None = None) -> str:
+        import hashlib
+        import json
+        payload = {"state": self.orch.state.model_dump(), "graph": self.graph.model_dump(),
+                   "actions": [a.model_dump() for a in plan.actions] if plan else None,
+                   "version": plan.version if plan else None}
+        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+    def invalidate_plans(self, reason: str) -> None:
+        for plan in self.orch.plan_history:
+            if plan.status in {PlanStatus.PENDING_APPROVAL, PlanStatus.VERIFIED, PlanStatus.APPROVED}:
+                plan.status = PlanStatus.FAILED
+                self.orch.save_plan(plan, reason)
 
     def _find_plan(self, plan_id: str) -> JointPlan | None:
         if self.orch.current_plan and self.orch.current_plan.id == plan_id:

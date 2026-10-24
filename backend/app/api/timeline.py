@@ -63,8 +63,7 @@ async def what_if(body: WhatIfBody, request: Request) -> dict[str, Any]:
     branch["after_state"] = st.model_dump()
 
     app.state.last_what_if = branch
-    await app.state.ws_manager.broadcast("whatif", {"label": body.label, "passed": result.passed,
-                                                    "score": result.score})
+    await app.state.ws_manager.broadcast("whatif", {**branch, "passed": result.passed, "score": result.score})
     return branch
 
 

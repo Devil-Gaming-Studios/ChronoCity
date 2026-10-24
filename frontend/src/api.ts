@@ -13,6 +13,8 @@ import type {
   CitySnapshot,
   PowerDiagnostics,
   CommunityState,
+  AuditPage,
+  SavedPlans,
 } from "./types";
 
 async function json<T>(res: Response): Promise<T> {
@@ -52,6 +54,11 @@ const post = (url: string, body?: unknown) =>
   });
 
 export const api = {
+  auditEvents: (params: { before?: number; kind?: string; scope?: string; plan_id?: string; limit?: number } = {}) =>
+    fetch(`/api/audit/events?${new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]))}`).then(json<AuditPage>),
+  auditPlans: (offset = 0) => fetch(`/api/audit/plans?limit=20&offset=${offset}`).then(json<SavedPlans>),
+  pendingPlans: () => fetch("/api/audit/pending").then(json<{ items: Array<{ plan: JointPlan; stale: boolean }> }>),
+  generatePlan: () => post("/api/plans/generate").then(json<Record<string, unknown>>),
   city: () => fetch("/api/city").then(json<CityGraph>),
   incidents: () => fetch("/api/incidents").then(json<Incident[]>),
   cascade: () => fetch("/api/incidents/cascade").then(json<Cascade>),

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from ..tools.traffic import shortest_route
 from ..models import CitySnapshot
 from ..sim.state import refresh_travel
+from ..db.audit import record
 
 router = APIRouter(tags=["infrastructure"])
 
@@ -174,7 +175,7 @@ async def vehicle_route(body: VehicleRouteRequest, request: Request) -> dict[str
         answer = f"No safe route is currently available for the {body.vehicle_type}."
     else:
         answer = f"Recommended {body.vehicle_type} route uses {len(route['edges'])} edge(s) and takes about {route['travel_s']:.0f} seconds."
-    return {
+    response = {
         "ok": True,
         "vehicle_type": body.vehicle_type,
         "origin": body.origin,
@@ -185,3 +186,6 @@ async def vehicle_route(body: VehicleRouteRequest, request: Request) -> dict[str
         "avoid_edges": sorted(set(state.flooded_edges) | {edge_id for edge_id, closed in state.closed_edges.items() if closed}),
         "route_recalculated_from": "provided_snapshot" if body.state is not None else "live_state",
     }
+    record(request.app, "route_recalculated", response, scope="preview" if body.state is not None else "live",
+           summary=answer)
+    return response

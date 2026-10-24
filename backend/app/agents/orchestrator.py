@@ -22,7 +22,9 @@ class Orchestrator:
       detect -> negotiate -> verify -> approve -> execute
     """
 
-    def __init__(self, graph: CityGraph) -> None:
+    def __init__(self, graph: CityGraph, audit=None) -> None:
+        self.audit = audit
+        self.plan_contexts: dict[str, str] = {}
         self.graph = graph
         self.dependency_graph = build_dependency_graph(graph)
         self.state: CitySnapshot = initial_state(graph)
@@ -54,7 +56,13 @@ class Orchestrator:
     # ---- action log ----
 
     def log(self, entry: ActionLogEntry) -> None:
+        if self.audit:
+            self.audit("agent_action", entry.model_dump(mode="json"), actor=entry.actor)
         self.action_log.append(entry)
+
+    def save_plan(self, plan: JointPlan, reason: str) -> None:
+        if self.audit:
+            self.audit("plan_snapshot", {"plan": plan.model_dump(mode="json"), "reason": reason}, summary=reason)
 
     # ---- approval gate ----
 
@@ -63,6 +71,9 @@ class Orchestrator:
 
     def approve(self, plan: JointPlan, approver: str = "operator", note: str = "", approved: bool = True) -> ApprovalRecord:
         rec = ApprovalRecord(plan_id=plan.id, approver=approver, approved=approved, note=note)
+        if self.audit:
+            self.audit("operator_decision", rec.model_dump(mode="json"), actor=approver,
+                       summary="Plan approved" if approved else "Plan rejected")
         self.approvals.append(rec)
         self.log(
             ActionLogEntry(
@@ -83,6 +94,8 @@ class Orchestrator:
     def _emit(self, kind: str, payload: dict[str, Any]) -> None:
         import time
 
+        if self.audit:
+            self.audit(kind, payload)
         self.timeline.append({"t": time.time(), "kind": kind, **payload})
         if len(self.timeline) > 500:
             self.timeline = self.timeline[-500:]

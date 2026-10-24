@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,6 +21,8 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     kafka_bootstrap: str = "localhost:9092"
     bus: Literal["memory", "redpanda"] = "memory"
+    # Local durable audit independent of optional telemetry services.
+    audit_db_path: str = str(Path(__file__).resolve().parents[1] / "data" / "audit.sqlite3")
 
     # llm
     llm_mode: Literal["gemini", "claude", "ollama", "scripted"] = "scripted"

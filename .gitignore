@@ -8,3 +8,6 @@ build/
 .env
 .idea/
 .vscode/
+backend/data/
+*.sqlite3
+*.sqlite3-journal

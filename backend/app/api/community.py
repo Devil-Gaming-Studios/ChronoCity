@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from ..agents.orchestrator import Orchestrator
 from ..agents.workflow import Workflow
 from ..models import CitySnapshot
+from ..db.audit import record
 from ..services.community import Category, get_community, known_zones, matching_evidence
 from ..sim.state import pipeline_affected_edges, pipeline_pressure_classification, preview_pipeline_pressure
 
@@ -45,9 +46,12 @@ async def complaints(body: ComplaintRequest, request: Request) -> dict[str, Any]
     community = get_community(request.app)
     if body.zone not in known_zones(community.graph):
         raise HTTPException(status_code=422, detail="zone must belong to the active city")
-    return community.submit(zone=body.zone, category=body.category, text=body.text, count=body.count,
+    result = community.submit(zone=body.zone, category=body.category, text=body.text, count=body.count,
                             state=body.state if body.state is not None else community.orchestrator.state,
                             preview=body.state is not None)
+    record(request.app, "complaint_inflow", result, scope="preview" if body.state is not None else "live",
+           actor="citizen", summary=f"{body.count} {body.category} complaints in {body.zone}: {result['batch']['verification_status']}")
+    return result
 
 
 @router.post("/pipeline-preview")
@@ -59,7 +63,7 @@ async def pipeline_preview(body: PipelinePreviewRequest, request: Request) -> di
     base = body.base_state if body.base_state is not None else request.app.state.orchestrator.state
     after = preview_pipeline_pressure(base, graph, asset.id, body.pressure_kpa)
     classification = pipeline_pressure_classification(body.pressure_kpa)
-    return {
+    result = {
         "ok": True, "source": "preview", "asset_id": asset.id, "zone": asset.tags.get("zone"),
         "pressure_kpa": body.pressure_kpa, "classification": classification,
         "sensor": {"classification": classification, "pressure_kpa": body.pressure_kpa, "proof_of_leak": False},
@@ -70,6 +74,9 @@ async def pipeline_preview(body: PipelinePreviewRequest, request: Request) -> di
                       "Synthetic thresholds: burst below 20 kPa, probable leak below 150 kPa. "
                       "Road flooding uses explicit affected_edge tags only. Normal pressure does not repair existing failures.",
     }
+    record(request.app, "pipeline_preview", {**result, "before_state": base.model_dump(mode="json")},
+           scope="preview", actor="operator", summary=f"Pipeline {asset.id}: {body.pressure_kpa} kPa ({classification})")
+    return result
 
 
 @router.post("/plan")
@@ -96,7 +103,7 @@ async def plan_community(body: CommunityPlanRequest, request: Request) -> dict[s
 
         # Isolate selected verified evidence. The ordinary workflow otherwise plans
         # every open incident, including unrelated ingestion/watch-only entries.
-        scoped = Orchestrator(community.graph)
+        scoped = Orchestrator(community.graph, audit=live.audit)
         scoped.state = live.state.model_copy(deep=True)
         before = scoped.state.model_dump()
         scoped.baseline = live.baseline.model_copy(deep=True)
@@ -109,6 +116,12 @@ async def plan_community(body: CommunityPlanRequest, request: Request) -> dict[s
         except Exception:
             community.event("planning_failed", incident_ids=body.incident_ids)
             raise
+        # Complaint-originated plans always receive an explicit operator review,
+        # even when their simulated actions are individually below HIGH impact.
+        # The complaint channel is evidence, never authorization.
+        if plan.status.value == "VERIFIED":
+            from ..models import PlanStatus
+            plan.status = PlanStatus.PENDING_APPROVAL
         if (request.app.state.graph is not community.graph or request.app.state.orchestrator is not live
                 or live.state.model_dump() != before):
             community.event("planning_discarded", reason="live state changed")
@@ -123,6 +136,8 @@ async def plan_community(body: CommunityPlanRequest, request: Request) -> dict[s
         live.current_plan = plan
         live.plan_history.append(plan)
         live.action_log.extend(scoped.action_log)
+        live.plan_contexts.update(scoped.plan_contexts)
+        live.save_plan(plan, "Verified live complaint response awaiting operator decision")
         live.plan_started_ts = scoped.plan_started_ts
         live.last_plan_duration_s = scoped.last_plan_duration_s
         community.event("planned", plan_id=plan.id, status=plan.status.value, incident_ids=plan.incident_ids)

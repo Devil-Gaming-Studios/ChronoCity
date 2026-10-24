@@ -291,5 +291,5 @@ async def run_simulation(body: SimulationRequest, request: Request) -> dict[str,
         "before_state": base.model_dump(),
         "after_state": after.model_dump(),
     }
-    await app.state.ws_manager.broadcast("simulation_complete", {"label": body.label, "answer": summary})
+    await app.state.ws_manager.broadcast("simulation_complete", response)
     return response

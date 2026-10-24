@@ -82,6 +82,8 @@ class CommunityState:
 
     def event(self, stage: str, **data: Any) -> dict[str, Any]:
         item = {"id": uuid.uuid4().hex[:12], "ts": time.time(), "stage": stage, **data}
+        if self.orchestrator.audit:
+            self.orchestrator.audit("community_event", item, scope=data.get("source", "live"))
         self.events.append(item)
         return item
 

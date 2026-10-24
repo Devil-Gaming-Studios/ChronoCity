@@ -9,7 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .agents.orchestrator import Orchestrator
 from .agents.workflow import Workflow, adk_available
-from .api import cities, commands, community, incidents, infrastructure, plans, scenarios, simulations, timeline
+from .api import audit, cities, commands, community, incidents, infrastructure, plans, scenarios, simulations, timeline
+from .db.audit import AuditStore
 from .api.ws import ConnectionManager
 from .city.build_city import build_demo_city
 from .runtime import install_city
@@ -18,13 +19,14 @@ from .ingest.bus import get_bus
 from .ingest.api import router as ingest_router
 
 
-def create_app() -> FastAPI:
+def create_app(audit_path: str | None = None) -> FastAPI:
     graph = build_demo_city()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # ---- startup ----
-        app.state.ws_manager = ConnectionManager()
+        app.state.audit = AuditStore(audit_path if audit_path is not None else settings.audit_db_path)
+        app.state.ws_manager = ConnectionManager(audit=app.state.audit.record)
         install_city(app, graph)
         app.state.bus = get_bus()
         app.state.last_what_if = None
@@ -120,12 +122,15 @@ def create_app() -> FastAPI:
         state_task = getattr(app.state, "state_stream_task", None)
         if state_task:
             state_task.cancel()
+        await asyncio.gather(*(t for t in (task, state_task) if t), return_exceptions=True)
         bus = app.state.bus
         if hasattr(bus, "stop"):
             try:
                 await bus.stop()
             except Exception:  # noqa: BLE001
                 pass
+        app.state.audit.record("runtime_stopped", {}, summary="Backend stopped; audit history retained")
+        app.state.audit.close()
 
     app = FastAPI(
         title="ChronoTwin API",
@@ -143,6 +148,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(ingest_router)
+    app.include_router(audit.router)
     app.include_router(cities.router)
     app.include_router(commands.router)
     app.include_router(community.router)
@@ -152,6 +158,26 @@ def create_app() -> FastAPI:
     app.include_router(simulations.router)
     app.include_router(timeline.router)
     app.include_router(scenarios.router)
+
+    @app.middleware("http")
+    async def audit_commands(request, call_next):
+        # Record outcomes (including validation/refusal) without headers, tokens,
+        # URL query strings, or arbitrary request bodies.
+        tracked = request.method == "POST" and request.url.path.startswith("/api/")
+        store = getattr(request.app.state, "audit", None)
+        path = request.url.path
+        scope = "preview" if any(part in path for part in ("preview", "commands/", "simulations/run", "simulations/fork", "whatif")) else "live"
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            if tracked and store:
+                store.record("request_failed", {"path": path, "error_type": type(exc).__name__}, scope=scope,
+                             summary=f"POST {path} failed")
+            raise
+        if tracked and store:
+            store.record("request_completed", {"path": path, "status_code": response.status_code}, scope=scope,
+                         summary=f"POST {path} returned HTTP {response.status_code}")
+        return response
 
     @app.get("/")
     async def root() -> dict[str, Any]:

@@ -266,6 +266,14 @@ def apply_action(state: CitySnapshot, graph: CityGraph, action: Action) -> CityS
             s.water_failures[asset_id] = "low pressure"
             s.failed_assets[asset_id] = "low pressure"
 
+    elif tool == "water.isolate_pipeline":
+        asset_id = str(p.get("asset_id") or (action.entity_ids[0] if action.entity_ids else ""))
+        if not any(asset.id == asset_id and asset.kind == "pipeline" for asset in graph.infrastructure):
+            raise ValueError("Only a mapped pipeline can be isolated")
+        s.water_isolated[asset_id] = True
+        s.water_pressure_kpa[asset_id] = 0.0
+        # Isolation is not repair and does not magically drain flooded roads.
+
     elif tool == "water.repair_pipe":
         asset_id = str(p.get("asset_id") or (action.entity_ids[0] if action.entity_ids else ""))
         s.water_failures.pop(asset_id, None)

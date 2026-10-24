@@ -262,7 +262,7 @@ class Action(BaseModel):
 class AgentProposal(BaseModel):
     id: str = Field(default_factory=_id)
     agent: str
-    domain: Literal["power", "traffic", "emergency"] = "traffic"
+    domain: Literal["power", "traffic", "emergency", "water"] = "traffic"
     incident_ids: list[str] = Field(default_factory=list)
     summary: str = ""
     actions: list[Action] = Field(default_factory=list)
@@ -349,6 +349,7 @@ class CitySnapshot(BaseModel):
     failed_assets: dict[str, str] = Field(default_factory=dict)   # asset_id -> failure reason
     water_pressure_kpa: dict[str, float] = Field(default_factory=dict)
     water_failures: dict[str, str] = Field(default_factory=dict)
+    water_isolated: dict[str, bool] = Field(default_factory=dict)
     vehicles: dict[str, str] = Field(default_factory=dict)      # vehicle_id -> edge_id
     ambulances: dict[str, dict[str, Any]] = Field(default_factory=dict)
     shelters: dict[str, dict[str, Any]] = Field(default_factory=dict)

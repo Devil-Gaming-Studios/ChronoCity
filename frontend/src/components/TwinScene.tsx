@@ -1,7 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { Cascade, CityBuilding, CityGraph, CitySnapshot, MapSelection } from "../types";
+import type { Cascade, CityBuilding, CityGraph, CitySnapshot, MapSelection, PowerDiagnostics } from "../types";
 
 export type ViewMode = "before" | "present" | "whatif";
 
@@ -13,10 +13,16 @@ interface Props {
   cascade: Cascade | null;
   viewMode: ViewMode;
   onSelect?: (selection: MapSelection | null, additive?: boolean) => void;
+  selection?: MapSelection | null;
   selectedId?: string | null;
   selectedIds?: string[];
   outageNodeIds?: string[];
   routeResult?: Record<string, unknown> | null;
+  powerDiagnostics?: PowerDiagnostics | null;
+  busy?: boolean;
+  onPreview?: (hazards: Array<Record<string, unknown>>) => Promise<void>;
+  onPipelinePreview?: (assetId: string, pressure: number) => Promise<void>;
+  onPreviewSelection?: () => void;
   layers?: { power: boolean; traffic: boolean; emergency: boolean; reports: boolean };
 }
 
@@ -202,8 +208,108 @@ function addPark(scene: THREE.Scene, x: number, z: number, width: number, depth:
   addTree(scene, x + width * 0.05, z - depth * 0.32, 0.55);
 }
 
-export default function TwinScene({ graph, state, beforeState, whatIfState, cascade, viewMode, onSelect, selectedId, selectedIds = [], outageNodeIds = [], routeResult, layers = { power: true, traffic: true, emergency: true, reports: true } }: Props) {
+interface FloatingUtilityCardProps {
+  cardRef: RefObject<HTMLDivElement>;
+  selection: MapSelection | null;
+  graph: CityGraph;
+  snapshot: CitySnapshot;
+  powerDiagnostics?: PowerDiagnostics | null;
+  busy: boolean;
+  onPreview: (hazards: Array<Record<string, unknown>>) => Promise<void>;
+  onPipelinePreview: (assetId: string, pressure: number) => Promise<void>;
+  onPreviewSelection: () => void;
+}
+
+function FloatingUtilityCard({ cardRef, selection, graph, snapshot, powerDiagnostics, busy, onPreview, onPipelinePreview, onPreviewSelection }: FloatingUtilityCardProps) {
+  const station = selection?.type === "substation"
+    ? powerDiagnostics?.stations.find((item) => item.substation_id === selection.id)
+    : undefined;
+  const pipeline = selection?.type === "pipeline"
+    ? graph.infrastructure?.find((asset) => asset.id === selection.id && asset.kind === "pipeline")
+    : undefined;
+  const [generation, setGeneration] = useState("");
+  const [load, setLoad] = useState("");
+  const [pressure, setPressure] = useState("");
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    setGeneration(station ? String(station.generation_mw) : "");
+    setLoad(station ? String(station.load_mw) : "");
+    setPressure(pipeline ? String(snapshot.water_pressure_kpa?.[pipeline.id] ?? 350) : "");
+    setMessage("");
+  }, [selection?.id, station?.generation_mw, station?.load_mw, pipeline?.id, snapshot.water_pressure_kpa]);
+
+  const run = async (action: () => Promise<void>) => {
+    setMessage("");
+    try {
+      await action();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Preview failed.");
+    }
+  };
+
+  const submitPower = () => {
+    if (!station) return;
+    const generationMw = Number(generation);
+    const loadMw = Number(load);
+    if (!Number.isFinite(generationMw) || generationMw < 0 || generationMw > station.capacity_mw || !Number.isFinite(loadMw) || loadMw < 0) {
+      setMessage(`Use generation 0–${station.capacity_mw} MW and a non-negative load.`);
+      return;
+    }
+    void run(() => onPreview([
+      { type: "power_generation", substation_id: station.substation_id, generation_mw: generationMw },
+      { type: "power_overload", substation_id: station.substation_id, load_mw: loadMw },
+    ]));
+  };
+
+  const submitPipeline = () => {
+    if (!pipeline) return;
+    const pressureKpa = Number(pressure);
+    if (!Number.isFinite(pressureKpa) || pressureKpa < 0 || pressureKpa > 1000) {
+      setMessage("Pressure must be between 0 and 1000 kPa.");
+      return;
+    }
+    void run(() => onPipelinePreview(pipeline.id, pressureKpa));
+  };
+
+  const visible = Boolean(station || pipeline);
+  return <div ref={cardRef} className="floating-utility-card" style={{ display: visible ? "grid" : "none" }}>
+    {station && <>
+      <div className="floating-card-kicker">POWER GRID · {station.status.split("_").join(" ")}</div>
+      <strong className="floating-card-title">{selection?.label ?? station.substation_id}</strong>
+      <div className="floating-reading-grid">
+        <span>Output <b>{station.output_mw} MW</b></span>
+        <span>Reserve <b>{station.reserve_mw} MW</b></span>
+        <span>Capacity <b>{station.capacity_mw} MW</b></span>
+        <span>Zones <b>{powerDiagnostics?.affected_zones.join(", ") || "none"}</b></span>
+      </div>
+      <div className="floating-field-row">
+        <label>Generation MW<input type="number" min="0" max={station.capacity_mw} step="0.1" value={generation} onChange={(event) => setGeneration(event.target.value)} /></label>
+        <label>Load MW<input type="number" min="0" step="0.1" value={load} onChange={(event) => setLoad(event.target.value)} /></label>
+      </div>
+      <div className="btn-row compact">
+        <button className="btn btn-primary" disabled={busy} onClick={submitPower}>Preview readings</button>
+        <button className="btn btn-danger" disabled={busy} onClick={() => void run(() => onPreview([{ type: "power_outage", substation_id: station.substation_id }]))}>Trip</button>
+        <button className="btn" disabled={busy} onClick={() => void run(() => onPreview([{ type: "power_restore", substation_id: station.substation_id }]))}>Restore</button>
+      </div>
+    </>}
+    {pipeline && <>
+      <div className="floating-card-kicker">WATER PIPELINE · {snapshot.water_failures?.[pipeline.id] ?? "normal"}</div>
+      <strong className="floating-card-title">{selection?.label ?? pipeline.id}</strong>
+      <div className="floating-card-note">Low pressure is a simulated warning. Only explicitly tagged affected roads can flood.</div>
+      <label>Pressure kPa<input type="number" min="0" max="1000" value={pressure} onChange={(event) => setPressure(event.target.value)} /></label>
+      <div className="btn-row compact">
+        <button className="btn btn-primary" disabled={busy} onClick={submitPipeline}>Preview pressure</button>
+        <button className="btn btn-danger" disabled={busy} onClick={onPreviewSelection}>Disable pipeline</button>
+      </div>
+    </>}
+    {message && <span className="floating-card-error" role="alert">{message}</span>}
+  </div>;
+}
+
+export default function TwinScene({ graph, state, beforeState, whatIfState, cascade, viewMode, onSelect, selection, selectedId, selectedIds = [], outageNodeIds = [], routeResult, powerDiagnostics, busy = false, onPreview, onPipelinePreview, onPreviewSelection, layers = { power: true, traffic: true, emergency: true, reports: true } }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const utilityCardRef = useRef<HTMLDivElement>(null);
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
   const handles = useRef<Handles>({
@@ -218,6 +324,7 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
 
   const snapshot: CitySnapshot | null =
     viewMode === "before" ? beforeState ?? state : viewMode === "whatif" ? whatIfState ?? state : state;
+
 
   // ---------- scene setup (once) ----------
   useEffect(() => {
@@ -606,6 +713,63 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
     controls.update();
   }, [graph, layers.emergency, layers.power, layers.traffic]);
 
+  // Keep the readable utility card anchored to the selected 3D structure while
+  // the operator pans, zooms, or rotates the map.
+  useEffect(() => {
+    const host = hostRef.current as any;
+    const card = utilityCardRef.current;
+    const hasStationData = selection?.type === "substation"
+      && Boolean(powerDiagnostics?.stations.some((item) => item.substation_id === selection.id));
+    const hasPipelineData = selection?.type === "pipeline"
+      && Boolean(graph?.infrastructure?.some((asset) => asset.id === selection.id && asset.kind === "pipeline"));
+    if (!host?.__chrono || !card || !graph || !selection || (!hasStationData && !hasPipelineData)) {
+      if (card) card.style.display = "none";
+      return;
+    }
+
+    const { camera, renderer } = host.__chrono as {
+      camera: THREE.PerspectiveCamera;
+      renderer: THREE.WebGLRenderer;
+    };
+    const substation = selection.type === "substation"
+      ? graph.substations.find((item) => item.id === selection.id)
+      : undefined;
+    const stationNode = substation ? graph.nodes.find((node) => node.id === substation.node_id) : undefined;
+    const pipeline = selection.type === "pipeline"
+      ? graph.infrastructure?.find((asset) => asset.id === selection.id && asset.kind === "pipeline")
+      : undefined;
+    const midpoint = pipeline?.geometry.length
+      ? pipeline.geometry.reduce((sum, point) => [sum[0] + point[0], sum[1] + point[1]] as [number, number], [0, 0])
+      : null;
+    if (!stationNode && !midpoint) {
+      card.style.display = "none";
+      return;
+    }
+
+    const anchor = stationNode
+      ? new THREE.Vector3(stationNode.x, 1.35, -stationNode.y)
+      : new THREE.Vector3(midpoint![0] / pipeline!.geometry.length, 0.65, -(midpoint![1] / pipeline!.geometry.length));
+    let raf = 0;
+    const update = () => {
+      const projected = anchor.clone().project(camera);
+      const width = renderer.domElement.clientWidth || 1;
+      const height = renderer.domElement.clientHeight || 1;
+      const visible = projected.z > -1 && projected.z < 1;
+      if (visible) {
+        const left = Math.max(132, Math.min(width - 132, (projected.x * 0.5 + 0.5) * width));
+        const top = Math.max(92, Math.min(height - 20, (-projected.y * 0.5 + 0.5) * height));
+        card.style.left = `${left}px`;
+        card.style.top = `${top}px`;
+        card.style.display = "grid";
+      } else {
+        card.style.display = "none";
+      }
+      raf = requestAnimationFrame(update);
+    };
+    update();
+    return () => cancelAnimationFrame(raf);
+  }, [graph, powerDiagnostics, selection?.id, selection?.type, snapshot]);
+
   // ---------- repaint on state / cascade / view-mode change ----------
   useEffect(() => {
     const h = handles.current;
@@ -732,6 +896,19 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
 
   return (
     <div className="twin-host" ref={hostRef}>
+      {graph && snapshot && onPreview && onPipelinePreview && onPreviewSelection && (
+        <FloatingUtilityCard
+          cardRef={utilityCardRef}
+          selection={selection ?? null}
+          graph={graph}
+          snapshot={snapshot}
+          powerDiagnostics={powerDiagnostics}
+          busy={busy}
+          onPreview={onPreview}
+          onPipelinePreview={onPipelinePreview}
+          onPreviewSelection={onPreviewSelection}
+        />
+      )}
       <div className="map-legend">Yellow: emergency route · Blue: flood · Purple: closed · Red rings: power outage</div>
       {graph?.source === "osm" && (
         <div className="city-attribution">

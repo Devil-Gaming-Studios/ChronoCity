@@ -21,7 +21,6 @@ export default function SimulationPanel(props: Props) {
   const [depth, setDepth] = useState("100");
   const [filter, setFilter] = useState("");
   const [error, setError] = useState("");
-  const [powerEdits, setPowerEdits] = useState<Record<string, { supply: string; load: string }>>({});
   if (!graph) return null;
   const nodes = graph.nodes.filter((node) => node.kind !== "substation");
   const options: MapSelection[] = [
@@ -96,36 +95,19 @@ export default function SimulationPanel(props: Props) {
       </div>
       <h4>Station power readings (MW)</h4>
       <p className="muted">Simulated supply/output, not measured electricity generation. Substations distribute power.</p>
-      {power?.stations.map((station) => {
-        const edits = powerEdits[station.substation_id] ?? { supply: String(station.generation_mw), load: String(station.load_mw) };
-        const valid = edits.supply.trim() !== "" && edits.load.trim() !== "" && Number.isFinite(Number(edits.supply)) && Number.isFinite(Number(edits.load))
-          && Number(edits.supply) >= 0 && Number(edits.load) >= 0 && Number(edits.supply) <= station.capacity_mw;
-        return <fieldset key={station.substation_id} className="station-editor" disabled={busy}>
-          <legend>{station.substation_id} · {station.status.split("_").join(" ")}</legend>
-          <strong>Output {station.output_mw} MW · Load {station.load_mw} MW</strong>
-          <div className="muted">Available supply {station.generation_mw} MW · Capacity {station.capacity_mw} MW</div>
-          <label>Supply MW<input type="number" min="0" max={station.capacity_mw} step="0.1" value={edits.supply}
-            onChange={(event) => setPowerEdits((current) => ({ ...current, [station.substation_id]: { ...edits, supply: event.target.value } }))} /></label>
-          <label>Load MW<input type="number" min="0" step="0.1" value={edits.load}
-            onChange={(event) => setPowerEdits((current) => ({ ...current, [station.substation_id]: { ...edits, load: event.target.value } }))} /></label>
-          {!valid && <span role="alert">Use non-negative MW values; supply cannot exceed capacity.</span>}
-          <div className="btn-row compact">
-            <button className="btn btn-primary" disabled={!valid} onClick={() => void run([
-              { type: "power_generation", substation_id: station.substation_id, generation_mw: Number(edits.supply) },
-              { type: "power_overload", substation_id: station.substation_id, load_mw: Number(edits.load) },
-            ])}>Preview readings</button>
-            <button className="btn btn-danger" onClick={() => void run([{ type: "power_outage", substation_id: station.substation_id }])}>Trip</button>
-            <button className="btn" onClick={() => void run([{ type: "power_restore", substation_id: station.substation_id }])}>Restore</button>
-          </div>
-        </fieldset>;
-      })}
+      {power?.stations.map((station) => <div key={station.substation_id} className="station-summary-row">
+        <strong>{station.substation_id}</strong>
+        <span>Output {station.output_mw} MW · Load {station.load_mw} MW · Supply {station.generation_mw} MW</span>
+        <span className={`badge ${station.status === "healthy" ? "badge-ok" : "badge-critical"}`}>{station.status.split("_").join(" ")}</span>
+      </div>)}
       {power && !power.stations.length && <p>No mapped stations are available in this city.</p>}
       <div className="control-result">
         <strong>Affected power zones: {power ? power.affected_zones.join(", ") || "none" : "loading…"}</strong>
         <span>Service points: {power?.affected_nodes.join(", ") || "none"}</span>
-        <span className="muted">Red rings show affected mapped service points, not a surveyed outage boundary.</span>
+        <span className="muted">Select a power station on the map to edit readings in its floating card. Red rings show mapped service points, not a surveyed outage boundary.</span>
       </div>
       {error && <p role="alert" className="badge-critical">{error}</p>}
+      <p className="muted utility-hint">Select a pipeline on the map to change pressure or preview a pipe disable in the floating card above it.</p>
     </div>
   </section>;
 }

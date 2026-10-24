@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
-import type { ActionLogEntry, Action, Impact, JointPlan } from "../types";
+import { useState } from "react";
+import type { Action, Impact, JointPlan } from "../types";
 import { api } from "../api";
 
 interface Props {
   plan: JointPlan | null;
   onAction: () => void;
+  stale?: boolean;
 }
 
 const impactClass: Record<Impact, string> = {
@@ -28,6 +29,7 @@ function actionText(action: Action): string {
     case "power.break_line": return `Mark power line ${id} as failed`;
     case "water.break_pipe": return `Mark water asset ${id} as broken`;
     case "water.set_pressure": return `Adjust water pressure for ${id}`;
+    case "water.isolate_pipeline": return `Shut off water supply to pipeline ${action.params.asset_id ?? id}`;
     case "emergency.dispatch": return `Dispatch an ambulance to the hospital`;
     default: return action.rationale || action.tool.split(".").join(" ");
   }
@@ -51,21 +53,10 @@ function verdictMetrics(plan: JointPlan): string | null {
   return keys.map((k) => `${k.split("_").join(" ")} ${Number(m[k]).toFixed(2)}`).join(" · ");
 }
 
-export default function PlanPanel({ plan, onAction }: Props) {
-  const [log, setLog] = useState<ActionLogEntry[]>([]);
+export default function PlanPanel({ plan, onAction, stale = false }: Props) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-
-  const refreshLog = async () => {
-    try {
-      const entries = await api.actionLog();
-      setLog(entries.slice(-8).reverse());
-    } catch {
-      /* backend offline */
-    }
-  };
-
-  useEffect(() => { void refreshLog(); }, [plan?.id, plan?.status]);
+  const [note, setNote] = useState("");
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -74,7 +65,6 @@ export default function PlanPanel({ plan, onAction }: Props) {
       const error = out?.error;
       setMessage(out?.ok === false ? `Request failed: ${error ?? "unknown error"}` : "Request accepted.");
       onAction();
-      await refreshLog();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Request failed.");
     } finally {
@@ -82,8 +72,8 @@ export default function PlanPanel({ plan, onAction }: Props) {
     }
   };
 
-  const approve = () => plan && act(() => api.approve(plan.id, true));
-  const reject = () => plan && act(() => api.approve(plan.id, false));
+  const approve = () => plan && act(() => api.approve(plan.id, true, note));
+  const reject = () => plan && act(() => api.approve(plan.id, false, note));
   const execute = () => plan && act(() => api.execute(plan.id));
   const removeAction = (actionId: string) => plan && act(() => api.editPlan(plan.id, [actionId]));
 
@@ -96,13 +86,13 @@ export default function PlanPanel({ plan, onAction }: Props) {
       <div className="panel-body">
         {!plan ? <p className="muted">Run a scenario or ask the assistant for a simulation. Any proposed response will appear here in plain language.</p> : (
           <>
-            <p className="plan-summary">The system reviewed the active incidents and prepared this response:</p>
+            <p className="plan-summary">Plan <code>{plan.id}</code> · version {plan.version}. All actions below affect the simulated live city only after approval and Apply.</p>
             <div className="plan-actions-readable">
               {plan.actions.length === 0 && <p className="muted">No changes are currently proposed.</p>}
               {plan.actions.map((action) => (
                 <div key={action.id} className="readable-action">
                   <span className={impactClass[action.impact]}>{action.impact}</span>
-                  <span>{actionText(action)}</span>
+                  <span>{actionText(action)}<small className="action-rationale">{action.rationale}</small><code>{action.entity_ids.join(", ")}</code></span>
                   {(plan.status === "PENDING_APPROVAL" || plan.status === "VERIFIED" || plan.status === "REVISED") && <button className="btn btn-small" disabled={busy} onClick={() => removeAction(action.id)}>Remove</button>}
                 </div>
               ))}
@@ -112,14 +102,18 @@ export default function PlanPanel({ plan, onAction }: Props) {
             {plan.critic_feedback && <div className="plan-note"><strong>Safety check</strong><div className="muted">{plan.critic_feedback}</div></div>}
             {verdictMetrics(plan) && <div className="muted plan-metrics">{verdictMetrics(plan)}</div>}
 
+            <label className="operator-note">Operator decision note<textarea value={note} maxLength={2000} onChange={(event) => setNote(event.target.value)} placeholder="Reason for approval or rejection (stored in the audit trail)" /></label>
             <div className="btn-row">
-              {plan.status === "PENDING_APPROVAL" && <>
-                <button className="btn btn-primary" disabled={busy} onClick={approve}>Approve response</button>
+              {(plan.status === "PENDING_APPROVAL" || plan.status === "VERIFIED") && <>
+                <button className="btn btn-primary" disabled={busy || stale} onClick={approve}>Approve response</button>
                 <button className="btn btn-danger" disabled={busy} onClick={reject}>Reject</button>
               </>}
-              {plan.status === "APPROVED" && <button className="btn btn-primary" disabled={busy} onClick={execute}>Apply response</button>}
+              {plan.status === "APPROVED" && <>
+                <button className="btn btn-primary" disabled={busy || stale} onClick={execute}>Apply approved response</button>
+                <button className="btn btn-danger" disabled={busy} onClick={reject}>Withdraw approval</button>
+              </>}
               {plan.status === "EXECUTED" && <span className="badge badge-ok">Response applied</span>}
-              {plan.status === "VERIFIED" && <span className="muted">No high-impact approval is needed.</span>}
+              {plan.status === "VERIFIED" && <span className="muted">Safety checked; operator approval is required.</span>}
               {plan.status === "FAILED" && <span className="muted">No action was applied.</span>}
             </div>
             {message && <p className="muted approval-message">{message}</p>}
@@ -127,9 +121,7 @@ export default function PlanPanel({ plan, onAction }: Props) {
             <details className="plan-details">
               <summary className="muted">Show technical details</summary>
               <div className="chips"><span className="chip">plan version {plan.version}</span><span className="chip">{plan.proposals.length} specialist inputs</span><span className="chip">{plan.conflicts.length} coordination conflicts</span></div>
-              {log.length > 0 && <div className="action-log">
-                {log.map((entry) => <div key={entry.id} className="log-line"><span className="chip">{entry.phase}</span><code>{entry.tool}</code><span className="muted">{entry.ok ? "ok" : "failed"}</span></div>)}
-              </div>}
+              <pre>{JSON.stringify(plan.actions, null, 2)}</pre>
             </details>
           </>
         )}

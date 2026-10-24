@@ -246,6 +246,70 @@ These commands produce a What-if result with a plain-language answer, explanatio
 - **Not invented:** if a city does not map its electrical feeders, pipes, sensors, elevations, or building heights in OSM, the simulator does not pretend those details exist.
 - **Next production layer:** attach authoritative utility GIS/SCADA/IoT feeds and domain solvers for hydraulics, electrical load flow, drainage, terrain, and sensor calibration.
 
+### City Simulation and Operator Dashboard
+
+The UI now has two explicit surfaces:
+
+- **City Simulation** — 3D city, sensor controls, cumulative what-if hazards, automatic emergency-route overlays, station generation/load controls, pipeline pressure previews, and area complaint influx.
+- **Operator Dashboard** — complaint verification status, watch-only evidence, community interruptions, agent/tool audit trails, current plan status, and the normal approve/reject workflow.
+
+Road routing is recalculated from the displayed snapshot. Closed, flooded, feeder-only, and unreachable edges are excluded from the ambulance graph; an unreachable destination returns no stale path. Congestion remains traversable but receives a higher travel-time cost.
+
+Example simulation controls:
+
+```text
+disable nodes J4, J5
+close roads E_J4_J6_U1, E_J5_J7
+set station S2 generation to 18 MW
+```
+
+Pipeline pressure is a hypothesis sensor: below 150 kPa is classified as a probable leak and below 20 kPa as a probable burst. Only synthetic or imported pipeline assets with an explicit `affected_edge` tag can flood a road; proximity is never inferred. A complaint batch is stored as untrusted display evidence, cross-checked against structured simulation state, and cannot authorize an action by itself.
+
+### Persistent operator history and human intervention
+
+The **Operator Dashboard** reads durable audit records from the backend database,
+not the browser's recent WebSocket messages. The offline demo uses SQLite at
+`backend/data/audit.sqlite3` (override with `AUDIT_DB_PATH`). This is a dedicated
+local audit database; the optional PostgreSQL/Timescale telemetry configuration
+is unchanged. No Docker service is needed for audit persistence. The data folder
+is git-ignored because complaint messages and operator notes are private runtime data.
+
+- Recorded: city installation/reset/state, simulation hazards and before/after
+  snapshots, pipeline pressure previews, route recalculations, complaint batches
+  and verification, agent read/propose calls, negotiation, critic revisions,
+  plan versions, human decision notes, execution attempts and results.
+- Preview events are explicitly labelled **What-if — no live change**. Opening
+  the dashboard fetches database history; it refreshes every three seconds.
+  Event-type/scope/plan filters, older-page navigation and a JSON export of all
+  matching records are available. There is no automatic history truncation.
+- Review all actions and targets, enter a decision note, then **Approve response**
+  or **Reject**. Approval alone changes no city state. **Apply approved response**
+  is a separate step; **Withdraw approval** cancels it before execution.
+- All generated plans require human approval. Removing an action creates a new
+  version and reruns safety verification. Changed city state or changed actions
+  invalidate approval; rejected/failed/already-executed responses cannot run.
+- **Plan verified live incidents** uses server-owned evidence only. A verified
+  mapped pipeline failure may propose `water.isolate_pipeline` (HIGH impact),
+  stopping simulated supply on that segment without claiming the pipe is repaired
+  or existing floodwater drained. Power actions continue through the same approval
+  gate. No new fire/electrical department dispatch integration is introduced.
+- City previews and preview complaints are audited, but are never promoted into
+  live authorization. In Present view, complaint evidence is checked server-side
+  against live state. Use **Combined**, then open Operator Dashboard, to try the
+  complete live-simulation review flow.
+
+API: `GET /api/audit/events` (cursor pagination), `GET /api/audit/plans`
+(saved plan history), `GET /api/audit/pending` (current-runtime approval queue),
+and `POST /api/plans/generate`. Existing approve/edit/execute APIs are retained.
+
+History survives city resets and backend restarts. Restart does **not** restore
+live city state or make historical approvals executable: older runtimes are
+read-only history. Recording begins with this update; already-lost memory-only
+events cannot be reconstructed. This local database is not tamper-proof archival
+storage, and the demo API has no authenticated operator roles. Do not expose it
+publicly or attach real utility actuators without authentication, authorization,
+backups and a production operational safety review.
+
 ## 3. Trigger the demo
 
 **Option A — in the UI (recommended):** open http://localhost:5173 and press **Combined**

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..models import Action, AgentProposal, CityGraph, CitySnapshot, Incident
+from ..models import Action, AgentProposal, CityGraph, CitySnapshot, Incident, Impact
 from ..tools import emergency as em
 from ..tools import power as pw
 from ..tools import traffic as tr
@@ -148,6 +148,26 @@ class EmergencyAgent(SpecialistBase):
         summary = await get_callbacks().guarded_complete(self.name, f"Emergency plan for {incident_ids}")
         get_llm()._record(self.name, "propose")
         return get_llm_proposal(self, incident_ids, summary, actions, read_calls)
+
+
+class WaterAgent(SpecialistBase):
+    domain = "water"
+    name = "water_agent"
+
+    async def run(self, state: CitySnapshot, incidents: list[Incident]) -> AgentProposal:
+        actions, reads = [], []
+        targets = {entity for inc in incidents if not inc.watch_only for entity in inc.entity_ids}
+        for asset in self.graph.infrastructure:
+            if asset.kind != "pipeline" or asset.id not in targets:
+                continue
+            reads.append(f"water.failure_state({asset.id})")
+            if (state.water_failures.get(asset.id) in {"pipe break", "simulated burst", "simulated probable leak"}
+                    and not state.water_isolated.get(asset.id, False)):
+                actions.append(Action(tool="water.isolate_pipeline", entity_ids=[asset.id],
+                    params={"asset_id": asset.id}, impact=Impact.HIGH, owner=self.name,
+                    rationale="Isolate the explicitly mapped failed pipeline. Water service to this segment stops; existing flooding and damage remain."))
+        return get_llm_proposal(self, [i.id for i in incidents],
+            "Review pipeline isolation against structured failure evidence; pressure alone is not proof.", actions, reads)
 
 
 def get_llm_proposal(

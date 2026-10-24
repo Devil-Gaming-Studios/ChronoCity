@@ -46,6 +46,7 @@ async def _run(request: Request, mode: str) -> dict[str, Any]:
     orch = app.state.orchestrator
     wf = app.state.workflow
     mgr = app.state.ws_manager
+    wf.invalidate_plans("New scenario started; previous approvals invalidated")
 
     # 1. open the twin in the scenario's failure state (the "before")
     if mode == "flood":
@@ -118,6 +119,7 @@ async def reset(request: Request) -> dict[str, Any]:
 
     app = request.app
     orch = app.state.orchestrator
+    app.state.workflow.invalidate_plans("City reset; previous approvals invalidated")
     orch.state = initial_state(app.state.graph)
     orch.incidents.clear()
     orch.current_plan = None

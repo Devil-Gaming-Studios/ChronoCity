@@ -140,6 +140,99 @@ code {
   display: block;
 }
 
+.floating-utility-card {
+  position: absolute;
+  z-index: 6;
+  transform: translate(-50%, calc(-100% - 14px));
+  width: min(320px, calc(100% - 20px));
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid #155e75;
+  border-radius: 9px;
+  background: rgba(13, 23, 34, 0.96);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.38), 0 0 0 1px rgba(34, 211, 238, 0.08);
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+
+.floating-utility-card::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -7px;
+  width: 12px;
+  height: 12px;
+  background: #0d1722;
+  border-right: 1px solid #155e75;
+  border-bottom: 1px solid #155e75;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.floating-card-kicker {
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .9px;
+  text-transform: uppercase;
+}
+
+.floating-card-title {
+  font-size: 14px;
+}
+
+.floating-reading-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px 9px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.floating-reading-grid b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.floating-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.floating-utility-card label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.floating-utility-card input {
+  width: 100%;
+  padding: 6px 7px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font: inherit;
+}
+
+.floating-utility-card input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.floating-card-note,
+.floating-card-hint {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.floating-card-error {
+  color: #fca5a5;
+  font-size: 10px;
+}
+
 /* ---------- interactive controls ---------- */
 
 .panel-controls {
@@ -882,6 +975,16 @@ h4 {
   font-size: 11px;
 }
 
+.station-summary-row {
+  display: grid;
+  grid-template-columns: 36px 1fr auto;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+}
+
 .outage-regions {
   margin-top: 8px;
   color: #fca5a5;
@@ -895,7 +998,39 @@ h4 {
 }
 .simulation-targets { max-height: 145px; overflow-y: auto; margin-top: 6px; }
 .simulation-targets label { font-size: 11px; overflow-wrap: anywhere; }
-.station-editor { margin: 10px 0; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
+.utility-hint { margin-top: 10px; }
+
+/* Operator surface: durable history and human decisions, separate from the map. */
+.operator-dashboard { flex: 1; min-height: 0; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 20px; }
+.operator-dashboard > * { flex-shrink: 0; }
+.operator-dashboard .panel-body { overflow: visible; }
+.operator-dashboard h2 { font-size: 18px; margin: 0 0 10px; }
+.operator-dashboard p { line-height: 1.5; }
+.dashboard-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.dashboard-card { padding: 16px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 7px; }
+.dashboard-card strong { font-size: 22px; color: var(--accent); }
+.dashboard-card span { color: var(--muted); }
+.operator-approvals .plan-panel { max-height: none; margin-top: 14px; }
+.operator-note { display: grid; gap: 6px; margin: 12px 0; }
+.operator-note textarea, .audit-filters input, .audit-filters select { width: 100%; min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: var(--bg); font: inherit; }
+.operator-note textarea { min-height: 66px; resize: vertical; }
+.action-rationale { display: block; color: var(--muted); margin: 6px 0; }
+.audit-filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 16px; }
+.audit-filters label { display: grid; gap: 6px; flex: 1 1 180px; }
+.audit-timeline { list-style: none; padding: 0; margin: 0; }
+.audit-timeline li { padding: 16px; margin-bottom: 10px; border: 1px solid var(--line); border-left: 3px solid #155e75; border-radius: 8px; overflow-wrap: anywhere; }
+.audit-event-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.audit-event-heading time { color: var(--muted); }
+.operator-dashboard pre { background: var(--bg); padding: 12px; max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 6px; }
+.operator-dashboard summary { cursor: pointer; }
+.audit-empty { padding: 18px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); }
+.saved-plan { padding: 12px 0; border-bottom: 1px solid var(--line); }
+@media (max-width: 700px) {
+  .dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .operator-dashboard { padding: 12px; }
+  .app-head { flex-wrap: wrap; }
+}
+.floating-card-hint { margin: 8px 0 0; padding: 6px 7px; border-left: 2px solid var(--accent); background: #0f202a; }
 .map-legend {
   position: absolute; top: 8px; left: 8px; right: 8px; z-index: 2; pointer-events: none;
   padding: 6px; background: #0b0e14dd; border-radius: 4px; font-size: 11px;
