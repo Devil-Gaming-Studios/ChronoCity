@@ -12,6 +12,7 @@ export default function OperatorDashboard({ onRefresh }: Props) {
   const [saved, setSaved] = useState<SavedPlans | null>(null);
   const [pending, setPending] = useState<Array<{ plan: JointPlan; stale: boolean }>>([]);
   const [community, setCommunity] = useState<CommunityState | null>(null);
+  const [complaintHistory, setComplaintHistory] = useState<AuditEvent[]>([]);
   const [before, setBefore] = useState<number | undefined>();
   const [kind, setKind] = useState("");
   const [scope, setScope] = useState("");
@@ -32,12 +33,12 @@ export default function OperatorDashboard({ onRefresh }: Props) {
       if (loading) return;
       loading = true;
       try {
-        const [events, plans, queue, complaints] = await Promise.all([
+        const [events, plans, queue, complaints, complaintEvents] = await Promise.all([
           api.auditEvents({ before, kind, scope, plan_id: planFilter }), api.auditPlans(offset),
-          api.pendingPlans(), api.communityState(),
+          api.pendingPlans(), api.communityState(), api.auditEvents({ kind: "complaint_inflow", limit: 200 }),
         ]);
         if (active) {
-          setPage(events); setSaved(plans); setPending(queue.items); setCommunity(complaints); setError("");
+          setPage(events); setSaved(plans); setPending(queue.items); setCommunity(complaints); setComplaintHistory(complaintEvents.items); setError("");
         }
       } catch (cause) {
         if (active) setError(`History refresh failed. Displayed data may be stale. ${String(cause)}`);
@@ -50,6 +51,15 @@ export default function OperatorDashboard({ onRefresh }: Props) {
 
   const refresh = () => { setRevision((value) => value + 1); onRefresh(); };
   const eligible = community?.incidents.filter((item) => item.eligible_for_plan).map((item) => String(item.id)) ?? [];
+  const complaintBatches = complaintHistory.length
+    ? complaintHistory.map((event) => event.payload.batch).filter((batch): batch is Record<string, unknown> => Boolean(batch && typeof batch === "object"))
+    : community?.batches ?? [];
+  const verifiedComplaints = complaintBatches.filter((batch) => batch.verification_status === "verified").length;
+  const inferredComplaints = complaintBatches.filter((batch) => batch.verification_status === "inferred").length;
+  const autoPlannedComplaints = complaintBatches.filter((batch) => {
+    const action = batch.agent_action as { status?: unknown } | undefined;
+    return action?.status === "planned";
+  }).length;
   const generate = async (complaints: boolean) => {
     setBusy(true); setMessage("");
     try {
@@ -90,9 +100,38 @@ export default function OperatorDashboard({ onRefresh }: Props) {
           <div className="dashboard-card"><strong>{pending.length}</strong><span>responses awaiting operator action</span></div>
           <div className="dashboard-card"><strong>{saved?.total ?? "—"}</strong><span>stored plans</span></div>
           <div className="dashboard-card"><strong>{page?.storage ?? "Connecting…"}</strong><span>durable local storage · refresh every 3s</span></div>
+          <div className="dashboard-card"><strong>{complaintBatches.length}</strong><span>complaint events logged</span></div>
+          <div className="dashboard-card"><strong>{verifiedComplaints}</strong><span>events matched to simulator evidence</span></div>
+          <div className="dashboard-card"><strong>{inferredComplaints}</strong><span>events inferred from complaint surges</span></div>
+          <div className="dashboard-card"><strong>{autoPlannedComplaints}</strong><span>AI response plans created automatically</span></div>
         </div>
         <p className="muted">Recording starts with this update. Previously lost in-memory events cannot be reconstructed. This is a local simulator, not a connection to real utility switches.</p>
         {error && <p role="alert" className="badge-critical">{error}</p>}
+      </div>
+    </section>
+
+    <section className="panel complaint-feed">
+      <header className="panel-head"><span>Mass complaint intake</span><span>Region events · newest first</span></header>
+      <div className="panel-body">
+        <p className="muted">Every complaint event is retained in the durable audit history and shown here with its evidence verdict and AI-agent handoff. Resident text remains untrusted display evidence and is never used as an agent instruction. Inferred events are simulation hypotheses created by the surge threshold, not sensor-confirmed facts.</p>
+        {!complaintBatches.length && <p className="audit-empty">No complaint events have been logged yet.</p>}
+        <ol className="complaint-list">
+          {[...complaintBatches].reverse().slice(0, 12).map((batch) => {
+            const action = batch.agent_action as { status?: string; plan_id?: string; message?: string } | undefined;
+            const status = String(batch.verification_status ?? "unknown");
+            return <li key={String(batch.id)}>
+              <div className="audit-event-heading">
+                <time dateTime={new Date(Number(batch.ts ?? 0) * 1000).toISOString()}>{new Date(Number(batch.ts ?? 0) * 1000).toLocaleString()}</time>
+                <span className="chip">{String(batch.zone)} · {String(batch.category)}</span>
+                <span className={status === "verified" ? "badge badge-ok" : status === "inferred" ? "badge badge-warn" : "badge badge-warn"}>{status === "verified" ? "Verified" : status === "inferred" ? "AI inferred" : "Watch only"}</span>
+                {action?.status && <span className={action.status === "planned" ? "badge badge-ok" : "chip"}>AI: {action.status.split("_").join(" ")}</span>}
+              </div>
+              <strong>{String(batch.count ?? 0)} resident complaints</strong>
+              <p className="muted">{String(batch.explanation ?? "No explanation recorded.")}{action?.plan_id ? ` · Plan ${action.plan_id} is awaiting operator review.` : ""}</p>
+              {Boolean(batch.text) && <details><summary>Resident message (display-only)</summary><p>{String(batch.text)}</p></details>}
+            </li>;
+          })}
+        </ol>
       </div>
     </section>
 
@@ -101,10 +140,10 @@ export default function OperatorDashboard({ onRefresh }: Props) {
       <p>Review the proposed targets, impacts and safety checks. Approve or reject with a note; applying an approved response is a separate action.</p>
       <div className="btn-row">
         <button className="btn btn-primary" disabled={busy} onClick={() => void generate(false)}>{busy ? "Planning…" : "Plan verified live incidents"}</button>
-        <button className="btn" disabled={busy || !eligible.length} onClick={() => void generate(true)}>Plan verified live complaints</button>
+        <button className="btn" disabled={busy || !eligible.length} onClick={() => void generate(true)}>Retry verified complaint plan</button>
         <button className="btn" onClick={refresh}>Refresh dashboard</button>
       </div>
-      <p className="muted">What-if complaints are recorded but cannot authorize live actions. Use a live scenario to exercise the approval workflow.</p>
+      <p className="muted">Verified and surge-inferred live complaint events automatically start agent planning. This button is a retry path for any eligible events whose planning failed; approval and execution remain separate operator actions.</p>
       {message && <p role="status">{message}</p>}
       {!pending.length && <p className="audit-empty">No responses awaiting review. Rejected or completed responses remain in the stored history below.</p>}
       {pending.map(({ plan, stale }) => <div key={plan.id}>

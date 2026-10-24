@@ -1025,6 +1025,15 @@ h4 {
 .operator-dashboard summary { cursor: pointer; }
 .audit-empty { padding: 18px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); }
 .saved-plan { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.complaint-feed { flex: 0 0 auto; }
+.complaint-list { list-style: none; padding: 0; margin: 0; }
+.complaint-list li { padding: 14px; margin-bottom: 10px; border: 1px solid var(--line); border-left: 3px solid #7c3aed; border-radius: 8px; overflow-wrap: anywhere; }
+.complaint-list p { margin: 6px 0 0; }
+
+.complaint-panel { flex: 0 0 auto; }
+.complaint-actions { margin-top: 10px; padding: 9px 10px; border: 1px solid #155e75; border-radius: 6px; background: #0d1722; }
+.complaint-actions ol { margin: 7px 0 0; padding-left: 20px; }
+.complaint-actions li { margin: 5px 0; line-height: 1.35; }
 @media (max-width: 700px) {
   .dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .operator-dashboard { padding: 12px; }

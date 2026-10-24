@@ -127,6 +127,11 @@ export default function App() {
           refreshPlan();
           refreshMetrics();
           break;
+        case "community":
+          void api.communityState().then(setCommunity).catch(() => undefined);
+          refreshPlan();
+          refreshMetrics();
+          break;
         case "command_response":
           setCommandResult({
             answer: e.answer,
@@ -278,10 +283,17 @@ export default function App() {
     }
   };
 
-  const submitComplaint = async (body: { zone: string; category: "flood" | "blackout" | "pipe_leak" | "traffic"; text: string; count: number; state?: CitySnapshot | null }) => {
-    const result = await api.submitComplaint(body);
+  const submitComplaint = async (body: { zone: string; category: "flood" | "blackout" | "pipe_leak" | "traffic"; text: string; count: number; state?: CitySnapshot | null; target_id?: string; target_type?: "road" | "residential_building" }): Promise<Record<string, unknown>> => {
+    const payload = { ...body };
+    if (payload.state == null) delete payload.state;
+    if (!payload.target_id || !payload.target_type) {
+      delete payload.target_id;
+      delete payload.target_type;
+    }
+    const result = await api.submitComplaint(payload);
     setCommunity(await api.communityState());
     setCommandResult(result);
+    return result;
   };
 
   const previewPipeline = async (assetId: string, pressure: number) => {
@@ -422,7 +434,7 @@ export default function App() {
             busy={commandBusy} onPreview={previewHazards} power={power} routeConfig={routeConfig}
             onRouteChange={setRouteConfig} routeResult={routeResult} viewMode={viewMode}
             onClearPreview={() => { setWhatIfState(null); setViewMode("present"); }} />
-          <ComplaintsPanel graph={graph} state={viewMode === "present" ? null : displayedState} community={community} busy={commandBusy} onSubmit={submitComplaint} />
+          <ComplaintsPanel graph={graph} selection={selection} state={viewMode === "present" ? null : displayedState} community={community} busy={commandBusy} onSubmit={submitComplaint} />
           <ControlPanel
             graph={graph}
             selection={selection}

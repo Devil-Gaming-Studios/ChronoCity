@@ -250,8 +250,8 @@ These commands produce a What-if result with a plain-language answer, explanatio
 
 The UI now has two explicit surfaces:
 
-- **City Simulation** — 3D city, sensor controls, cumulative what-if hazards, automatic emergency-route overlays, station generation/load controls, pipeline pressure previews, and area complaint influx.
-- **Operator Dashboard** — complaint verification status, watch-only evidence, community interruptions, agent/tool audit trails, current plan status, and the normal approve/reject workflow.
+- **City Simulation** — 3D city, sensor controls, cumulative what-if hazards, automatic emergency-route overlays, station generation/load controls, pipeline pressure previews, and a region-based mass complaint event control.
+- **Operator Dashboard** — complaint verification status, watch-only evidence, community interruptions, every complaint batch, automatic agent handoffs, agent/tool audit trails, current plan status, and the normal approve/reject workflow.
 
 Road routing is recalculated from the displayed snapshot. Closed, flooded, feeder-only, and unreachable edges are excluded from the ambulance graph; an unreachable destination returns no stale path. Congestion remains traversable but receives a higher travel-time cost.
 
@@ -263,7 +263,7 @@ close roads E_J4_J6_U1, E_J5_J7
 set station S2 generation to 18 MW
 ```
 
-Pipeline pressure is a hypothesis sensor: below 150 kPa is classified as a probable leak and below 20 kPa as a probable burst. Only synthetic or imported pipeline assets with an explicit `affected_edge` tag can flood a road; proximity is never inferred. A complaint batch is stored as untrusted display evidence, cross-checked against structured simulation state, and cannot authorize an action by itself.
+Pipeline pressure is a hypothesis sensor: below 150 kPa is classified as a probable leak and below 20 kPa as a probable burst. Only synthetic or imported pipeline assets with an explicit `affected_edge` tag can flood a road; proximity is never inferred. A mass complaint event is stored as untrusted display evidence. When no structured simulator evidence matches, fewer than 50 reports remain watch-only, while 50 or more structured complaints for one region and one topic create a bounded simulation inference (for example, a mapped pipeline leak or a likely substation outage) even without a sensor reading. The inference never uses resident text, never executes an action, and still goes through the normal critic and operator approval workflow.
 
 ### Persistent operator history and human intervention
 

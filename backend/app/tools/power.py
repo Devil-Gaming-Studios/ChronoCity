@@ -81,6 +81,22 @@ def propose_restore_substation(substation_id: str, rationale: str = "") -> Actio
     )
 
 
+def propose_trip_substation(substation_id: str, rationale: str = "") -> Action:
+    """Simulation-only seed for a complaint-inferred outage.
+
+    It remains an Action proposal and therefore cannot change the live twin
+    without the normal critic and operator approval gates.
+    """
+    return Action(
+        tool="power.trip_substation",
+        entity_ids=[substation_id],
+        params={"substation_id": substation_id},
+        impact=Impact.HIGH,
+        rationale=rationale or "model the complaint-inferred substation outage",
+        owner="power",
+    )
+
+
 def propose_set_generation(substation_id: str, generation_mw: float, rationale: str = "") -> Action:
     return Action(
         tool="power.set_generation",
@@ -109,6 +125,7 @@ __all__ = [
     "dark_signals",
     "propose_reroute_feeder",
     "propose_restore_substation",
+    "propose_trip_substation",
     "propose_load_shed",
     "propose_set_generation",
 ]

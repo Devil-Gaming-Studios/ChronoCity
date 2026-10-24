@@ -9,7 +9,7 @@ from ..agents.orchestrator import Orchestrator
 from ..agents.workflow import Workflow
 from ..models import CitySnapshot
 from ..db.audit import record
-from ..services.community import Category, get_community, known_zones, matching_evidence
+from ..services.community import Category, ComplaintTargetType, get_community, inferred_complaint_evidence, known_zones, matching_evidence, resolve_complaint_target
 from ..sim.state import pipeline_affected_edges, pipeline_pressure_classification, preview_pipeline_pressure
 
 router = APIRouter(prefix="/api/community", tags=["community"])
@@ -17,11 +17,13 @@ router = APIRouter(prefix="/api/community", tags=["community"])
 
 class ComplaintRequest(BaseModel):
     model_config = {"extra": "forbid"}
-    zone: str = Field(min_length=1, max_length=128)
+    zone: str = Field(default="", max_length=128)
     category: Category
     text: str = Field(default="", max_length=2000)
     count: int = Field(default=1, ge=1, le=100, strict=True)
     state: CitySnapshot | None = None
+    target_id: str | None = Field(default=None, min_length=1, max_length=256)
+    target_type: ComplaintTargetType | None = None
 
 
 class CommunityPlanRequest(BaseModel):
@@ -44,13 +46,59 @@ async def community_state(request: Request) -> dict[str, Any]:
 @router.post("/complaints")
 async def complaints(body: ComplaintRequest, request: Request) -> dict[str, Any]:
     community = get_community(request.app)
-    if body.zone not in known_zones(community.graph):
+    try:
+        target = resolve_complaint_target(community.graph, body.target_id, body.target_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    zone = target.get("zone") if target and target.get("zone") else body.zone
+    if not zone or zone not in known_zones(community.graph):
         raise HTTPException(status_code=422, detail="zone must belong to the active city")
-    result = community.submit(zone=body.zone, category=body.category, text=body.text, count=body.count,
+    result = community.submit(zone=zone, category=body.category, text=body.text, count=body.count,
                             state=body.state if body.state is not None else community.orchestrator.state,
-                            preview=body.state is not None)
+                            preview=body.state is not None, target=target)
+    # Live complaint influxes are evidence, not authorization. When the
+    # structured simulator evidence verifies a live incident, automatically
+    # hand it to the agent workflow so the operator receives a response plan.
+    # The workflow still stops at PENDING_APPROVAL; no live action is executed
+    # merely because residents submitted complaints.
+    agent_action: dict[str, Any] = {"status": "not_started"}
+    if body.state is not None:
+        agent_action = {"status": "preview_only", "message": "What-if complaints are recorded but do not start live planning."}
+    elif result["batch"]["verification_status"] in {"verified", "inferred"}:
+        eligible_ids = [item["id"] for item in result["incidents"] if item.get("eligible_for_plan")]
+        if not eligible_ids:
+            agent_action = {"status": "already_tracked", "message": "The issue is already in the operator workflow."}
+        else:
+            try:
+                planned = await plan_community(CommunityPlanRequest(incident_ids=eligible_ids), request)
+                plan = planned.get("plan", {})
+                agent_action = {
+                    "status": "planned",
+                    "plan_id": plan.get("id"),
+                    "plan_status": plan.get("status"),
+                    "requires_approval": planned.get("requires_approval", True),
+                    "actions": [
+                        {"tool": action.get("tool"), "entity_ids": action.get("entity_ids", []),
+                         "impact": action.get("impact"), "rationale": action.get("rationale", "")}
+                        for action in plan.get("actions", [])
+                    ],
+                    "message": "The AI agent created a response plan for operator approval.",
+                }
+            except HTTPException as exc:
+                agent_action = {"status": "planning_failed", "message": str(exc.detail)}
+            except Exception as exc:  # noqa: BLE001
+                agent_action = {"status": "planning_failed", "message": f"Agent planning failed: {type(exc).__name__}"}
+
+    result["agent_action"] = agent_action
+    result["batch"]["agent_action"] = agent_action
+    if agent_action.get("plan_id"):
+        result["batch"]["plan_id"] = agent_action["plan_id"]
     record(request.app, "complaint_inflow", result, scope="preview" if body.state is not None else "live",
-           actor="citizen", summary=f"{body.count} {body.category} complaints in {body.zone}: {result['batch']['verification_status']}")
+           actor="citizen", summary=f"{body.count} {body.category} complaints in {body.zone}: "
+           f"{result['batch']['verification_status']} → {agent_action['status']}")
+    manager = getattr(request.app.state, "ws_manager", None)
+    if manager:
+        await manager.broadcast("community", {"batch": result["batch"], "agent_action": agent_action})
     return result
 
 
@@ -91,10 +139,12 @@ async def plan_community(body: CommunityPlanRequest, request: Request) -> dict[s
             record = community.incidents.get(incident_id)
             if record is None:
                 raise HTTPException(status_code=404, detail="unknown or expired community incident")
-            if record["source"] != "live" or record["status"] != "verified":
-                raise HTTPException(status_code=409, detail="only unplanned verified live incidents are eligible")
+            if record["source"] != "live" or record["status"] not in {"verified", "inferred"}:
+                raise HTTPException(status_code=409, detail="only unplanned verified or complaint-inferred live incidents are eligible")
             incident = record["incident"]
             current = matching_evidence(community.graph, live.state, incident.zone, record["category"])
+            if not current and record["status"] == "inferred":
+                current = inferred_complaint_evidence(community.graph, incident.zone, record["category"])
             if not any(item.dedupe_key == incident.dedupe_key for item in current):
                 record["status"] = "stale"
                 community.event("stale", incident_id=incident_id)

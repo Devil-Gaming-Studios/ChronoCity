@@ -40,11 +40,21 @@ class PowerAgent(SpecialistBase):
             dark.extend(pw.dark_signals(self.graph, state, zone=inc.zone))
             read_calls.append(f"power.dark_signals(zone={inc.zone})")
 
+            if "community_reports" in inc.evidence_sources and not st.get("total_dark_signals"):
+                actions.append(pw.propose_trip_substation(
+                    sid,
+                    rationale="Model the complaint-inferred outage first; operator approval is required before the simulated trip.",
+                ))
+
             # 2. PROPOSE a backfeed from a healthy substation
             healthy = [s for s in self.graph.substations if s.id != sid]
             if healthy:
                 src = healthy[0]
                 dark_ids = [d["signal_id"] for d in dark]
+                if "community_reports" in inc.evidence_sources and not dark_ids:
+                    dark_ids = [signal.id for signal in self.graph.signals if signal.feeder_id in next(
+                        (sub.feeders for sub in self.graph.substations if sub.id == sid), []
+                    )]
                 # the feeder on the healthy substation closest to the dark zone
                 target_feeder = src.feeders[0]
                 actions.append(
@@ -91,8 +101,16 @@ class TrafficAgent(SpecialistBase):
             congestion = tr.congestion_map(self.graph, state)
             read_calls.append("traffic.congestion_map()")
 
+            inferred = "community_reports" in inc.evidence_sources
+            if inferred and inc.kind == "flood" and not es.get("flooded"):
+                actions.append(tr.propose_flood_edge(
+                    edge,
+                    depth_cm=100.0,
+                    rationale="Model the complaint-inferred flooding first; operator approval is required before the simulated hazard is added.",
+                ))
+
             # close the flooded edge, then reroute onto a known detour corridor
-            if es.get("flooded") or es.get("blocked"):
+            if es.get("flooded") or es.get("blocked") or inferred:
                 actions.append(tr.propose_close_edge(edge, rationale=f"{es.get('depth_cm', 0)}cm water; impassable."))
             detour_pref = ["E_J5_J7", "E_J6_J7", "E_J8_H1", "E_J2_J3"]
             fast = next((eid for eid in detour_pref if eid != edge and eid not in state.flooded_edges), None)
@@ -161,11 +179,16 @@ class WaterAgent(SpecialistBase):
             if asset.kind != "pipeline" or asset.id not in targets:
                 continue
             reads.append(f"water.failure_state({asset.id})")
-            if (state.water_failures.get(asset.id) in {"pipe break", "simulated burst", "simulated probable leak"}
-                    and not state.water_isolated.get(asset.id, False)):
+            inferred = any("community_reports" in inc.evidence_sources and asset.id in inc.entity_ids for inc in incidents)
+            known_failure = state.water_failures.get(asset.id) in {"pipe break", "simulated burst", "simulated probable leak"}
+            if inferred and not known_failure:
+                actions.append(Action(tool="water.break_pipe", entity_ids=[asset.id],
+                    params={"asset_id": asset.id}, impact=Impact.HIGH, owner=self.name,
+                    rationale="Model the complaint-inferred pipeline leak first; operator approval is required before the simulated break."))
+            if ((known_failure or inferred) and not state.water_isolated.get(asset.id, False)):
                 actions.append(Action(tool="water.isolate_pipeline", entity_ids=[asset.id],
                     params={"asset_id": asset.id}, impact=Impact.HIGH, owner=self.name,
-                    rationale="Isolate the explicitly mapped failed pipeline. Water service to this segment stops; existing flooding and damage remain."))
+                    rationale="Isolate the mapped pipeline implicated by structured evidence. Water service to this segment stops; existing flooding and damage remain."))
         return get_llm_proposal(self, [i.id for i in incidents],
             "Review pipeline isolation against structured failure evidence; pressure alone is not proof.", actions, reads)
 

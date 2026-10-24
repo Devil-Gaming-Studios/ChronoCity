@@ -22,7 +22,21 @@ async function json<T>(res: Response): Promise<T> {
     let detail = "";
     try {
       const body = (await res.clone().json()) as { detail?: unknown; error?: unknown };
-      detail = String(body.detail ?? body.error ?? "");
+      const raw = body.detail ?? body.error ?? "";
+      if (Array.isArray(raw)) {
+        detail = raw.map((item) => {
+          if (item && typeof item === "object") {
+            const entry = item as { loc?: unknown[]; msg?: unknown };
+            const location = Array.isArray(entry.loc) ? entry.loc.join(" → ") : "request";
+            return `${location}: ${String(entry.msg ?? "invalid value")}`;
+          }
+          return String(item);
+        }).join("; ");
+      } else if (raw && typeof raw === "object") {
+        detail = JSON.stringify(raw);
+      } else {
+        detail = String(raw);
+      }
     } catch {
       /* use the HTTP status when the server did not return JSON */
     }
@@ -96,7 +110,19 @@ export const api = {
     post("/api/routes/vehicles", body).then(json<Record<string, unknown>>),
   previewPower: (state: CitySnapshot) => post("/api/infrastructure/diagnostics/preview", { state }).then(json<PowerDiagnostics>),
   communityState: () => fetch("/api/community/state").then(json<CommunityState>),
-  submitComplaint: (body: { zone: string; category: "flood" | "blackout" | "pipe_leak" | "traffic"; text: string; count: number; state?: CitySnapshot | null }) => post("/api/community/complaints", body).then(json<Record<string, unknown>>),
+  submitComplaint: async (body: { zone: string; category: "flood" | "blackout" | "pipe_leak" | "traffic"; text: string; count: number; state?: CitySnapshot | null; target_id?: string; target_type?: "road" | "residential_building" }) => {
+    try {
+      return await post("/api/community/complaints", body).then(json<Record<string, unknown>>);
+    } catch (error) {
+      // Older backend processes still use the pre-target complaint schema. A
+      // rejected validation request has no side effect, so retry once without
+      // the optional target fields and let the selected target's zone scope it.
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("target_id") || !message.includes("Extra inputs")) throw error;
+      const { target_id: _targetId, target_type: _targetType, ...legacyBody } = body;
+      return post("/api/community/complaints", legacyBody).then(json<Record<string, unknown>>);
+    }
+  },
   pipelinePreview: (body: { asset_id: string; pressure_kpa: number; base_state?: CitySnapshot | null }) => post("/api/community/pipeline-preview", body).then(json<Record<string, unknown>>),
   planCommunity: (incident_ids: string[]) => post("/api/community/plan", { incident_ids }).then(json<Record<string, unknown>>),
   runCommand: (body: { text: string; start_from?: "healthy" | "current"; selected_entity_id?: string; selected_entity_ids?: string[]; selected_entity_type?: string; base_state?: CitySnapshot | null }) =>
