@@ -10,6 +10,9 @@ import type {
   JointPlan,
   Metrics,
   WhatIfBranch,
+  CitySnapshot,
+  PowerDiagnostics,
+  CommunityState,
 } from "./types";
 
 async function json<T>(res: Response): Promise<T> {
@@ -77,13 +80,19 @@ export const api = {
     start_from?: "healthy" | "current";
     hazards: Array<Record<string, unknown>>;
     actions?: Action[];
+    base_state?: CitySnapshot | null;
   }) => post("/api/simulations/run", body).then(json<Record<string, unknown>>),
   hospitals: () => fetch("/api/hospitals").then(json<HospitalInfo[]>),
   hospital: (hospitalId: string) => fetch(`/api/hospitals/${encodeURIComponent(hospitalId)}`).then(json<HospitalInfo & Record<string, unknown>>),
   diagnostics: (domain: "power" | "water") => fetch(`/api/infrastructure/diagnostics?domain=${domain}`).then(json<Record<string, unknown>>),
-  vehicleRoute: (body: { vehicle_type: "firetruck" | "police" | "ambulance"; origin?: string; destination_node?: string; hospital_id?: string; incident_edge_id?: string }) =>
+  vehicleRoute: (body: { vehicle_type: "firetruck" | "police" | "ambulance"; origin?: string; destination_node?: string; hospital_id?: string; incident_edge_id?: string; state?: CitySnapshot | null }) =>
     post("/api/routes/vehicles", body).then(json<Record<string, unknown>>),
-  runCommand: (body: { text: string; start_from?: "healthy" | "current"; selected_entity_id?: string; selected_entity_type?: string }) =>
+  previewPower: (state: CitySnapshot) => post("/api/infrastructure/diagnostics/preview", { state }).then(json<PowerDiagnostics>),
+  communityState: () => fetch("/api/community/state").then(json<CommunityState>),
+  submitComplaint: (body: { zone: string; category: "flood" | "blackout" | "pipe_leak" | "traffic"; text: string; count: number; state?: CitySnapshot | null }) => post("/api/community/complaints", body).then(json<Record<string, unknown>>),
+  pipelinePreview: (body: { asset_id: string; pressure_kpa: number; base_state?: CitySnapshot | null }) => post("/api/community/pipeline-preview", body).then(json<Record<string, unknown>>),
+  planCommunity: (incident_ids: string[]) => post("/api/community/plan", { incident_ids }).then(json<Record<string, unknown>>),
+  runCommand: (body: { text: string; start_from?: "healthy" | "current"; selected_entity_id?: string; selected_entity_ids?: string[]; selected_entity_type?: string; base_state?: CitySnapshot | null }) =>
     fetchWithTimeout("/api/commands/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

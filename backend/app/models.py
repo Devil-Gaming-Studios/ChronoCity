@@ -113,6 +113,7 @@ class Substation(BaseModel):
     node_id: str
     feeders: list[str] = Field(default_factory=list)
     capacity_mw: float = 40.0
+    generation_mw: float = 30.0
 
 
 class Feeder(BaseModel):
@@ -228,7 +229,7 @@ class Anomaly(BaseModel):
 
 class Incident(BaseModel):
     id: str = Field(default_factory=_id)
-    kind: Literal["flood", "substation_trip", "signal_dark", "gridlock", "ambulance_delayed"] = "flood"
+    kind: Literal["flood", "substation_trip", "signal_dark", "gridlock", "ambulance_delayed", "pipe_leak"] = "flood"
     severity: IncidentSeverity = IncidentSeverity.WARNING
     zone: str = "Z0"
     entity_ids: list[str] = Field(default_factory=list)
@@ -334,6 +335,7 @@ class SimulationResult(BaseModel):
 
 
 class CitySnapshot(BaseModel):
+    model_config = {"allow_inf_nan": False}
     t: float = 0.0
     powered: dict[str, bool] = Field(default_factory=dict)      # feeder_id -> on
     signals_ok: dict[str, bool] = Field(default_factory=dict)   # signal_id -> ok
@@ -343,6 +345,7 @@ class CitySnapshot(BaseModel):
     edge_factor: dict[str, float] = Field(default_factory=dict)    # edge_id -> reroute factor
     edge_travel_s: dict[str, float] = Field(default_factory=dict)  # edge_id -> seconds
     power_load_mw: dict[str, float] = Field(default_factory=dict)  # substation_id -> load
+    power_generation_mw: dict[str, float] = Field(default_factory=dict)  # substation_id -> generated output
     failed_assets: dict[str, str] = Field(default_factory=dict)   # asset_id -> failure reason
     water_pressure_kpa: dict[str, float] = Field(default_factory=dict)
     water_failures: dict[str, str] = Field(default_factory=dict)

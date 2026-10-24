@@ -13,6 +13,8 @@ def shortest_route(graph: CityGraph, state: CitySnapshot, src: str, dst: str) ->
     edges = {e.id: e for e in graph.edges}
     adj: dict[str, list[tuple[str, str]]] = {}
     for e in graph.edges:
+        if e.kind == "feeder":
+            continue
         adj.setdefault(e.src, []).append((e.dst, e.id))
         adj.setdefault(e.dst, []).append((e.src, e.id))
 
@@ -38,7 +40,7 @@ def shortest_route(graph: CityGraph, state: CitySnapshot, src: str, dst: str) ->
                 heapq.heappush(pq, (nd, v))
 
     if dst not in dist:
-        return {"src": src, "dst": dst, "reachable": False, "travel_s": float("inf"), "edges": [], "nodes": []}
+        return {"src": src, "dst": dst, "reachable": False, "travel_s": None, "edges": [], "nodes": []}
 
     # reconstruct
     path_edges: list[str] = []

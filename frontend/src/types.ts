@@ -42,6 +42,35 @@ export interface MapSelection {
   label: string;
 }
 
+export interface RouteRequest {
+  vehicle_type: "ambulance" | "firetruck" | "police";
+  origin: string;
+  destination_node: string;
+}
+
+export interface PowerDiagnostics {
+  domain: string;
+  stations: Array<{
+    substation_id: string;
+    generation_mw: number;
+    output_mw: number;
+    load_mw: number;
+    capacity_mw: number;
+    status: string;
+  }>;
+  affected_nodes: string[];
+  affected_zones: string[];
+  coverage_note: string;
+  model_note: string;
+}
+
+export interface CommunityState {
+  batches: Array<Record<string, unknown>>;
+  incidents: Array<Record<string, unknown>>;
+  events: Array<Record<string, unknown>>;
+  limits?: Record<string, number>;
+}
+
 export interface CityBuilding {
   id: string;
   name: string;
@@ -55,10 +84,11 @@ export interface CityBuilding {
 export interface CityGraph {
   nodes: CityNode[];
   edges: CityEdge[];
-  substations: { id: string; node_id: string; feeders: string[]; capacity_mw: number }[];
+  substations: { id: string; node_id: string; feeders: string[]; capacity_mw: number; generation_mw?: number }[];
   feeders: { id: string; substation_id: string; serves: string[] }[];
   signals: { id: string; node_id: string; feeder_id: string }[];
   hospitals: HospitalInfo[];
+  shelters?: { id: string; node_id: string; name: string; capacity: number; available: number; active: boolean }[];
   underpasses: { id: string; edge_id: string; name: string }[];
   buildings?: CityBuilding[];
   infrastructure?: { id: string; kind: string; geometry: [number, number][]; name: string }[];
@@ -77,8 +107,12 @@ export interface CitySnapshot {
   closed_edges: Record<string, boolean>;
   edge_factor: Record<string, number>;
   edge_travel_s: Record<string, number>;
+  power_load_mw: Record<string, number>;
+  power_generation_mw: Record<string, number>;
+  failed_assets: Record<string, string>;
   vehicles: Record<string, string>;
   ambulances: Record<string, Record<string, unknown>>;
+  shelters?: Record<string, Record<string, unknown>>;
 }
 
 export type Impact = "LOW" | "MEDIUM" | "HIGH";

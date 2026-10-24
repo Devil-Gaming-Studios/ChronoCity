@@ -65,3 +65,18 @@ def test_backfeed_restores_and_passes(graph, combined):
     assert res.passed is True
     assert res.travel_time_s <= res.baseline_travel_time_s
     assert res.final_state is not None
+
+
+def test_route_recalculates_around_blocked_road(graph, healthy):
+    from app.models import Action
+    from app.tools.traffic import shortest_route
+
+    baseline = shortest_route(graph, healthy, "DEPOT", "H1")
+    blocked = apply_action(healthy, graph, Action(
+        tool="traffic.close_edge", entity_ids=["E_J4_J6_U1"],
+        params={"edge_id": "E_J4_J6_U1"},
+    ))
+    recalculated = shortest_route(graph, blocked, "DEPOT", "H1")
+    assert baseline["reachable"] and recalculated["reachable"]
+    assert "E_J4_J6_U1" not in recalculated["edges"]
+    assert recalculated["travel_s"] > baseline["travel_s"]

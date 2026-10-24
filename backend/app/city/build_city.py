@@ -8,6 +8,7 @@ from ..models import (
     Feeder,
     Hospital,
     HospitalDepartment,
+    InfrastructureAsset,
     Node,
     Signal,
     Shelter,
@@ -79,8 +80,8 @@ def build_demo_city() -> CityGraph:
     ]
 
     substations = [
-        Substation(id="S1", node_id="S1", feeders=["F1", "F2"], capacity_mw=40),
-        Substation(id="S2", node_id="S2", feeders=["F3", "F4"], capacity_mw=40),
+        Substation(id="S1", node_id="S1", feeders=["F1", "F2"], capacity_mw=40, generation_mw=32),
+        Substation(id="S2", node_id="S2", feeders=["F3", "F4"], capacity_mw=40, generation_mw=30),
     ]
 
     feeders = [
@@ -118,6 +119,24 @@ def build_demo_city() -> CityGraph:
     ]
     underpasses = [Underpass(id="U1", edge_id="E_J4_J6_U1", name="River Road Underpass")]
     shelters = [Shelter(id="SH1", node_id="SH1", name="Riverside Shelter", capacity=250, available=250)]
+    # Explicit synthetic service/road relationships; never inferred from proximity.
+    infrastructure = [
+        InfrastructureAsset(
+            id="PIPE_Z1", kind="pipeline", name="Demo North Water Main",
+            geometry=[(0, 2), (2, 1)],
+            tags={"zone": "Z1", "affected_edge": "E_J1_J4", "synthetic": "true"},
+        ),
+        InfrastructureAsset(
+            id="PIPE_Z2", kind="pipeline", name="Demo South Water Main",
+            geometry=[(2, 0), (4, 0)],
+            tags={"zone": "Z2", "affected_edge": "E_J6_J7", "synthetic": "true"},
+        ),
+        InfrastructureAsset(
+            id="PIPE_Z3", kind="pipeline", name="Demo Hospital Water Main",
+            geometry=[(6, 1), (6, 0)],
+            tags={"zone": "Z3", "affected_edge": "E_J8_H1", "synthetic": "true"},
+        ),
+    ]
 
     return CityGraph(
         nodes=nodes,
@@ -128,6 +147,7 @@ def build_demo_city() -> CityGraph:
         hospitals=hospitals,
         shelters=shelters,
         underpasses=underpasses,
+        infrastructure=infrastructure,
         source="demo",
         source_ref="built-in",
         name="ChronoTwin Demo City",

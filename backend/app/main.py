@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .agents.orchestrator import Orchestrator
 from .agents.workflow import Workflow, adk_available
-from .api import cities, commands, incidents, infrastructure, plans, scenarios, simulations, timeline
+from .api import cities, commands, community, incidents, infrastructure, plans, scenarios, simulations, timeline
 from .api.ws import ConnectionManager
 from .city.build_city import build_demo_city
 from .runtime import install_city
@@ -66,6 +66,8 @@ def create_app() -> FastAPI:
                         detector_graph = current_graph
                         det = AnomalyDetector(current_graph, trust_threshold=settings.trust_action_threshold)
                     for summary in agg.flush():
+                        if det is None:
+                            continue
                         for inc in det.detect(summary):
                             if app.state.orchestrator.add_incident(inc):
                                 await mgr.broadcast("incident", {
@@ -80,6 +82,25 @@ def create_app() -> FastAPI:
 
         # start the ingest consumer (memory bus is always available)
         app.state.ingest_task = asyncio.create_task(ingest_loop())
+
+        async def state_stream() -> None:
+            """Check for state changes at 10 Hz; avoid repeated identical frames."""
+            previous = None
+            try:
+                while True:
+                    await asyncio.sleep(0.1)
+                    current = app.state.orchestrator.state.model_dump()
+                    if current == previous:
+                        continue
+                    await app.state.ws_manager.broadcast(
+                        "state",
+                        {"state": current},
+                    )
+                    previous = current
+            except asyncio.CancelledError:
+                return
+
+        app.state.state_stream_task = asyncio.create_task(state_stream())
 
         # optional DB schema init (never required for the demo)
         if settings.bus == "redpanda":
@@ -124,6 +145,7 @@ def create_app() -> FastAPI:
     app.include_router(ingest_router)
     app.include_router(cities.router)
     app.include_router(commands.router)
+    app.include_router(community.router)
     app.include_router(infrastructure.router)
     app.include_router(incidents.router)
     app.include_router(plans.router)

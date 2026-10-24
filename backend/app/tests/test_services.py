@@ -60,3 +60,45 @@ def test_heavy_traffic_command_targets_selected_road(graph, healthy):
     updated = apply_action(healthy, graph, actions[0])
     assert updated.edge_factor["E_J4_J6_U1"] == 2.0
     assert updated.edge_travel_s["E_J4_J6_U1"] > healthy.edge_travel_s["E_J4_J6_U1"]
+
+
+def test_multiple_node_disruptions_close_incident_roads(graph, healthy):
+    from app.models import Action
+
+    updated = apply_action(healthy, graph, Action(
+        tool="traffic.disable_node",
+        entity_ids=["J4", "J5"],
+        params={"node_ids": ["J4", "J5"]},
+    ))
+    assert updated.closed_edges["E_J4_J5"] is True
+    assert updated.closed_edges["E_J4_J6_U1"] is True
+    assert updated.closed_edges["E_J5_J7"] is True
+    assert updated.signals_ok["SIG_J4"] is False
+    assert updated.signals_ok["SIG_J5"] is False
+
+
+def test_power_generation_can_create_and_restore_outage(graph, healthy):
+    low = apply_action(healthy, graph, Action(
+        tool="power.set_generation", entity_ids=["S2"],
+        params={"substation_id": "S2", "generation_mw": 10},
+    ))
+    assert low.power_generation_mw["S2"] == 10
+    assert low.failed_assets["S2"] == "generation shortfall"
+    assert low.signals_ok["SIG_J5"] is False
+
+    restored = apply_action(low, graph, Action(
+        tool="power.set_generation", entity_ids=["S2"],
+        params={"substation_id": "S2", "generation_mw": 35},
+    ))
+    assert restored.power_generation_mw["S2"] == 35
+    assert restored.signals_ok["SIG_J5"] is True
+
+
+def test_command_parser_supports_multiple_roads_and_generation():
+    parsed, sim = parse_command(CommandRequest(text="close roads E_J4_J6_U1, E_J5_J7"))
+    assert parsed["edge_ids"] == ["E_J4_J6_U1", "E_J5_J7"]
+    assert sim is not None and sim.hazards[0].edge_ids == ["E_J4_J6_U1", "E_J5_J7"]
+
+    parsed, sim = parse_command(CommandRequest(text="set station S2 generation to 18 MW"))
+    assert parsed["intent"] == "power_generation"
+    assert sim is not None and sim.hazards[0].generation_mw == 18

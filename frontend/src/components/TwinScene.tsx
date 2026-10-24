@@ -12,8 +12,11 @@ interface Props {
   whatIfState: CitySnapshot | null;
   cascade: Cascade | null;
   viewMode: ViewMode;
-  onSelect?: (selection: MapSelection | null) => void;
+  onSelect?: (selection: MapSelection | null, additive?: boolean) => void;
   selectedId?: string | null;
+  selectedIds?: string[];
+  outageNodeIds?: string[];
+  routeResult?: Record<string, unknown> | null;
   layers?: { power: boolean; traffic: boolean; emergency: boolean; reports: boolean };
 }
 
@@ -21,6 +24,7 @@ interface Handles {
   edgeMeshes: Map<string, THREE.Mesh>;
   edgeBase: Map<string, number>;
   floodMeshes: Map<string, THREE.Mesh>;
+  congestionMeshes: Map<string, THREE.Mesh>;
   nodeMeshes: Map<string, THREE.Mesh>;
   signalMeshes: Map<string, THREE.Mesh>;
   ambulance: THREE.Mesh | null;
@@ -55,6 +59,26 @@ function addCity<T extends THREE.Object3D>(scene: THREE.Scene, object: T): T {
   (object as any).__city = true;
   scene.add(object);
   return object;
+}
+
+function makeFloodMaterial() {
+  return new THREE.ShaderMaterial({
+    uniforms: { time: { value: 0 }, color: { value: new THREE.Color(C.flooded) } },
+    transparent: true,
+    side: THREE.DoubleSide,
+    vertexShader: `varying vec2 vUv; uniform float time; void main(){ vUv=uv; vec3 p=position; p.y += sin((p.x+p.z)*8.0+time*3.0)*0.012; gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.0); }`,
+    fragmentShader: `varying vec2 vUv; uniform float time; uniform vec3 color; void main(){ float wave=0.55+0.2*sin((vUv.x+vUv.y)*18.0+time*4.0); gl_FragColor=vec4(color*wave,0.8); }`,
+  });
+}
+
+function makeCongestionMaterial() {
+  return new THREE.ShaderMaterial({
+    uniforms: { time: { value: 0 }, color: { value: new THREE.Color(C.congested) } },
+    transparent: true,
+    depthWrite: false,
+    vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader: `varying vec2 vUv; uniform float time; uniform vec3 color; void main(){ float pulse=0.55+0.35*sin(time*5.0+vUv.x*12.0); gl_FragColor=vec4(color,pulse); }`,
+  });
 }
 
 function makePickable(object: THREE.Object3D, type: string, id: string, label: string) {
@@ -178,7 +202,7 @@ function addPark(scene: THREE.Scene, x: number, z: number, width: number, depth:
   addTree(scene, x + width * 0.05, z - depth * 0.32, 0.55);
 }
 
-export default function TwinScene({ graph, state, beforeState, whatIfState, cascade, viewMode, onSelect, selectedId, layers = { power: true, traffic: true, emergency: true, reports: true } }: Props) {
+export default function TwinScene({ graph, state, beforeState, whatIfState, cascade, viewMode, onSelect, selectedId, selectedIds = [], outageNodeIds = [], routeResult, layers = { power: true, traffic: true, emergency: true, reports: true } }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
@@ -188,6 +212,7 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
     floodMeshes: new Map(),
     nodeMeshes: new Map(),
     signalMeshes: new Map(),
+    congestionMeshes: new Map(),
     ambulance: null,
   });
 
@@ -276,7 +301,7 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
         id: String(object.userData.entityId),
         type: String(object.userData.entityType),
         label: String(object.userData.entityLabel),
-      });
+      }, event.shiftKey);
     };
     renderer.domElement.addEventListener("pointerdown", pick);
 
@@ -286,9 +311,13 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
       const t = clock.getElapsedTime();
       controls.update();
       for (const water of handles.current.floodMeshes.values()) {
-        const mat = water.material as THREE.MeshStandardMaterial;
-        mat.emissiveIntensity = 0.45 + Math.sin(t * 3.2) * 0.12;
-        water.position.y = 0.16 + Math.sin(t * 2.1) * 0.012;
+        const mat = water.material as THREE.ShaderMaterial;
+        if (mat.uniforms?.time) mat.uniforms.time.value = t;
+        water.position.y = 0.16;
+      }
+      for (const glow of handles.current.congestionMeshes.values()) {
+        const mat = glow.material as THREE.ShaderMaterial;
+        if (mat.uniforms?.time) mat.uniforms.time.value = t;
       }
       renderer.render(scene, camera);
       raf = requestAnimationFrame(tick);
@@ -333,6 +362,7 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
       edgeMeshes: new Map(),
       edgeBase: new Map(),
       floodMeshes: new Map(),
+      congestionMeshes: new Map(),
       nodeMeshes: new Map(),
       signalMeshes: new Map(),
       ambulance: null,
@@ -404,25 +434,12 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
       }
 
       // Water sits above the underpass carriageway and is toggled by the snapshot.
-      const water = makeStrip(
-        scene,
-        a,
-        b,
-        roadWidth * 0.86,
-        0.035,
-        0.16,
-        new THREE.MeshStandardMaterial({
-          color: C.flooded,
-          emissive: 0x062b72,
-          emissiveIntensity: 0.5,
-          transparent: true,
-          opacity: 0.82,
-          roughness: 0.2,
-          metalness: 0.15,
-        })
-      );
+      const water = makeStrip(scene, a, b, roadWidth * 0.86, 0.035, 0.16, makeFloodMaterial());
       water.visible = false;
       handles.current.floodMeshes.set(e.id, water);
+      const congestion = makeStrip(scene, a, b, roadWidth * 0.78, 0.018, 0.125, makeCongestionMaterial());
+      congestion.visible = false;
+      handles.current.congestionMeshes.set(e.id, congestion);
 
       if (e.kind === "underpass") {
         const portalMaterial = new THREE.MeshStandardMaterial({ color: 0x182235, roughness: 0.92 });
@@ -600,6 +617,9 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
       if (!ok) darkNodes.add(s.node_id);
     }
     const affected = new Set(cascade?.affected ?? []);
+    const route = routeResult?.route as { edges?: string[] } | undefined;
+    const routeEdges = new Set(layers.emergency ? route?.edges ?? [] : []);
+    const selected = new Set(selectedIds);
 
     for (const e of graph.edges) {
       const mesh = h.edgeMeshes.get(e.id);
@@ -615,15 +635,18 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
       let color = e.kind === "underpass" ? C.underpass : C.road;
       if (viewMode === "whatif" && factor < 1) color = C.rerouted;
       else if (travel > free * 1.4 && !flooded && !closed) color = C.congested;
-      if (closed) color = C.closed;
-      if (flooded) color = C.flooded;
-      mat.color.setHex(color);
-      const selectedEdge = selectedId === mesh.userData.entityId;
-      mat.emissive.setHex(selectedEdge ? 0x075985 : flooded ? 0x0a2a66 : darkEnd ? 0x1a0508 : 0x000000);
-      mesh.position.y = flooded ? 0.075 : 0.06;
+       if (closed) color = C.closed;
+       if (flooded) color = C.flooded;
+       if (routeEdges.has(e.id) && !flooded && !closed) color = C.ambulance;
+       mat.color.setHex(color);
+       const selectedEdge = selected.has(mesh.userData.entityId) || selectedId === mesh.userData.entityId;
+       mat.emissive.setHex(routeEdges.has(e.id) ? 0x8a5a00 : selectedEdge ? 0x075985 : flooded ? 0x0a2a66 : darkEnd ? 0x1a0508 : 0x000000);
+       mesh.position.y = flooded ? 0.075 : 0.06;
 
-      const water = h.floodMeshes.get(e.id);
-      if (water) water.visible = flooded;
+       const water = h.floodMeshes.get(e.id);
+       if (water) water.visible = flooded;
+       const congestion = h.congestionMeshes.get(e.id);
+       if (congestion) congestion.visible = layers.traffic && travel > free * 1.4 && !flooded && !closed;
     }
 
     for (const n of graph.nodes) {
@@ -634,10 +657,14 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
       if (n.kind === "junction") {
         mat.color.setHex(isDark ? C.dark : C.junction);
         mat.emissive.setHex(affected.has(n.id) ? 0x4d3c06 : isDark ? 0x2a0508 : 0x000000);
-        const s = (affected.has(n.id) ? 1.35 : 1) * (selectedId === mesh.userData.entityId ? 1.3 : 1);
+        const s = (affected.has(n.id) ? 1.35 : 1) * (selected.has(mesh.userData.entityId) || selectedId === mesh.userData.entityId ? 1.3 : 1);
         mesh.scale.set(s, 1, s);
       } else if (n.kind === "hospital") {
         mat.emissive.setHex(affected.has(n.id) ? 0x4d3c06 : 0x0a3d1e);
+      } else if (n.kind === "substation") {
+        const sub = graph.substations.find((item) => item.node_id === n.id);
+        const offline = sub && sub.feeders.length > 0 && sub.feeders.every((fid) => !snapshot.powered[fid]);
+        mat.color.setHex(offline ? 0xef4444 : C.substation);
       }
     }
 
@@ -655,10 +682,57 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
       const mat = h.ambulance.material as THREE.MeshStandardMaterial;
       mat.emissive.setHex(dispatched ? 0xffb302 : 0x4a4208);
     }
-  }, [graph, snapshot, cascade, viewMode, selectedId]);
+  }, [graph, snapshot, cascade, viewMode, selectedId, selectedIds, routeResult, layers.traffic, layers.power, layers.emergency]);
+
+  const outageKey = JSON.stringify(outageNodeIds);
+  const routeNodes = (routeResult?.route as { nodes?: string[] } | undefined)?.nodes ?? [];
+  const routeKey = JSON.stringify(routeNodes);
+  useEffect(() => {
+    const scene = (hostRef.current as any)?.__chrono?.scene as THREE.Scene | undefined;
+    if (!scene || !graph) return;
+    const overlay = new THREE.Group();
+    scene.add(overlay);
+    const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
+    if (layers.power) {
+      for (const id of JSON.parse(outageKey) as string[]) {
+        const node = nodes.get(id);
+        if (!node) continue;
+        const ring = new THREE.Mesh(new THREE.RingGeometry(0.4, 0.65, 32), new THREE.MeshBasicMaterial({
+          color: 0xff3344, side: THREE.DoubleSide, transparent: true, opacity: 0.7, depthWrite: false,
+        }));
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.set(node.x, 0.2, -node.y);
+        overlay.add(ring);
+      }
+    }
+    if (layers.emergency) {
+      const path = JSON.parse(routeKey) as string[];
+      for (let i = 1; i < path.length; i++) {
+        const a = nodes.get(path[i - 1]);
+        const b = nodes.get(path[i]);
+        if (!a || !b) continue;
+        const dx = b.x - a.x, dz = a.y - b.y;
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(Math.hypot(dx, dz), 0.04, 0.09),
+          new THREE.MeshBasicMaterial({ color: C.ambulance }));
+        strip.position.set((a.x + b.x) / 2, 0.28, -(a.y + b.y) / 2);
+        strip.rotation.y = -Math.atan2(dz, dx);
+        overlay.add(strip);
+      }
+    }
+    return () => {
+      scene.remove(overlay);
+      overlay.traverse((object) => {
+        if (object instanceof THREE.Mesh) {
+          object.geometry.dispose();
+          (object.material as THREE.Material).dispose();
+        }
+      });
+    };
+  }, [graph, outageKey, routeKey, layers.power, layers.emergency]);
 
   return (
     <div className="twin-host" ref={hostRef}>
+      <div className="map-legend">Yellow: emergency route · Blue: flood · Purple: closed · Red rings: power outage</div>
       {graph?.source === "osm" && (
         <div className="city-attribution">
           {graph.name ?? "Imported city"} · {graph.attribution ?? "© OpenStreetMap contributors · ODbL"}

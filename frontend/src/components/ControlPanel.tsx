@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { CityGraph, HospitalInfo, MapSelection } from "../types";
 
 interface Props {
@@ -35,7 +36,13 @@ export default function ControlPanel({
   onRoute,
 }: Props) {
   const station = diagnostics?.probable_station as Record<string, unknown> | undefined;
+  const stations = Array.isArray(diagnostics?.stations) ? diagnostics.stations as Record<string, unknown>[] : [];
+  const selectedStation = selection?.type === "substation"
+    ? stations.find((item) => String(item.substation_id) === selection.id)
+    : undefined;
+  const [powerValue, setPowerValue] = useState("30");
   const routeAnswer = String(routeResult?.answer ?? "");
+  const route = routeResult?.route as { reachable?: boolean } | undefined;
   const selectedEdge = selection && ["edge", "underpass"].includes(selection.type)
     ? graph?.edges.find((edge) => edge.id === selection.id)
     : null;
@@ -78,11 +85,26 @@ export default function ControlPanel({
               {["pipeline", "waterway", "water_works", "wastewater_plant"].includes(selection.type) && <button className="btn btn-warn" onClick={() => onQuickCommand("break the selected water pipe")}>Break water pipe</button>}
               {canPreview && <button className="btn btn-warn" onClick={onPreviewSelection}>Preview disable</button>}
 
+              {selection.type === "substation" && selectedStation && (
+                <div className="power-controls">
+                  <div className="power-readings">
+                    <div><span className="muted">Output:</span> {String(selectedStation.output_mw)} MW</div>
+                    <div><span className="muted">Load:</span> {String(selectedStation.load_mw)} MW</div>
+                    <div><span className="muted">Reserve:</span> {String(selectedStation.reserve_mw)} MW</div>
+                  </div>
+                  <div className="command-row">
+                    <input className="command-input" type="number" min="0" value={powerValue} onChange={(event) => setPowerValue(event.target.value)} inputMode="decimal" aria-label="Power MW" />
+                    <button className="btn btn-warn" onClick={() => onQuickCommand(`set station ${selection.id} generation to ${powerValue} MW`)}>Set generation</button>
+                    <button className="btn" onClick={() => onQuickCommand(`set station ${selection.id} load to ${powerValue} MW`)}>Set load</button>
+                  </div>
+                </div>
+              )}
+
               {(selection.type === "hospital" || selection.type === "edge" || selection.type === "underpass") && (
                 <div className="btn-row compact">
                   <button className="btn" onClick={() => onRoute("firetruck")}>Plan firetruck route</button>
                   <button className="btn" onClick={() => onRoute("police")}>Plan police route</button>
-                  {selection.type === "hospital" && <button className="btn" onClick={() => onRoute("ambulance")}>Plan ambulance route</button>}
+                  {(selection.type === "hospital" || selection.type === "edge" || selection.type === "underpass") && <button className="btn" onClick={() => onRoute("ambulance")}>Plan ambulance route</button>}
                 </div>
               )}
             </>
@@ -109,17 +131,18 @@ export default function ControlPanel({
           </div>
         )}
 
-        {station && (
+        {diagnostics?.domain === "power" && (
           <div className="diagnostic-card">
-            <h4>Power status</h4>
-            <div><span className="muted">Likely station:</span> {String(station.substation_id)}</div>
-            <div><span className="muted">Status:</span> {String(station.status)}</div>
-            <div><span className="muted">Likely cause:</span> {String(station.probable_cause)}</div>
+            <h4>Power production and outage regions</h4>
+            {station && <div><span className="muted">Likely station:</span> {String(station.substation_id)} · {String(station.status)}</div>}
+            {stations.map((item) => <div className="power-station-row" key={String(item.substation_id)}><strong>{String(item.substation_id)}</strong><span>{String(item.generation_mw)} MW produced · {String(item.load_mw)} MW load</span><span className={`badge ${item.status === "healthy" ? "badge-ok" : "badge-critical"}`}>{String(item.status)}</span></div>)}
+            <div className="outage-regions"><span className="muted">Affected regions:</span> {Array.isArray(diagnostics?.affected_zones) && diagnostics.affected_zones.length ? diagnostics.affected_zones.join(", ") : "none"}</div>
+            {Array.isArray(diagnostics?.affected_nodes) && diagnostics.affected_nodes.length > 0 && <div className="muted">Dark nodes: {diagnostics.affected_nodes.join(", ")}</div>}
           </div>
         )}
 
         {routeAnswer && <div className="control-result"><strong>{routeAnswer}</strong></div>}
-        {routeResult?.route != null && <div className="control-result"><strong>Route ready</strong><div className="muted">The route uses the current road conditions and avoids blocked roads.</div></div>}
+        {route?.reachable && <div className="control-result"><strong>Route ready</strong><div className="muted">The yellow path uses the displayed snapshot and avoids blocked roads.</div></div>}
         {graph?.source === "osm" && <div className="muted source-note">Map: {graph.name}. Utility behavior is simulated only where assets are mapped.</div>}
       </div>
     </section>

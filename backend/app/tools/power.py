@@ -81,6 +81,17 @@ def propose_restore_substation(substation_id: str, rationale: str = "") -> Actio
     )
 
 
+def propose_set_generation(substation_id: str, generation_mw: float, rationale: str = "") -> Action:
+    return Action(
+        tool="power.set_generation",
+        entity_ids=[substation_id],
+        params={"substation_id": substation_id, "generation_mw": generation_mw},
+        impact=Impact.HIGH,
+        rationale=rationale or "set the station's generated power output",
+        owner="power",
+    )
+
+
 def propose_load_shed(substation_id: str, feeders: list[str], rationale: str = "") -> Action:
     return Action(
         tool="power.load_shed",
@@ -99,4 +110,5 @@ __all__ = [
     "propose_reroute_feeder",
     "propose_restore_substation",
     "propose_load_shed",
+    "propose_set_generation",
 ]

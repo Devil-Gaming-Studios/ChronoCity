@@ -12,6 +12,8 @@ import type {
   Metrics,
   HospitalInfo,
   MapSelection,
+  RouteRequest,
+  PowerDiagnostics,
 } from "./types";
 import TwinScene, { type ViewMode } from "./components/TwinScene";
 import IncidentPanel from "./components/IncidentPanel";
@@ -19,6 +21,7 @@ import PlanPanel from "./components/PlanPanel";
 import ChatterPanel from "./components/ChatterPanel";
 import TimelineBar from "./components/TimelineBar";
 import ControlPanel from "./components/ControlPanel";
+import SimulationPanel from "./components/SimulationPanel";
 
 export default function App() {
   const [graph, setGraph] = useState<CityGraph | null>(null);
@@ -40,7 +43,10 @@ export default function App() {
   const [commandText, setCommandText] = useState("");
   const [commandBusy, setCommandBusy] = useState(false);
   const [commandResult, setCommandResult] = useState<Record<string, unknown> | null>(null);
-  const [routeResult, setRouteResult] = useState<Record<string, unknown> | null>(null);
+  const [routeResponse, setRouteResponse] = useState<{ key: string; result: Record<string, unknown> } | null>(null);
+  const [powerResponse, setPowerResponse] = useState<{ key: string; result: PowerDiagnostics } | null>(null);
+  const [routeConfig, setRouteConfig] = useState<RouteRequest | null>(null);
+  const [selectedItems, setSelectedItems] = useState<MapSelection[]>([]);
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [layers, setLayers] = useState({ power: true, traffic: true, emergency: true, reports: true });
 
@@ -133,6 +139,44 @@ export default function App() {
   );
 
   const socket = useChronoSocket(onEvent);
+  const displayedState = viewMode === "before" ? beforeState ?? socket.state
+    : viewMode === "whatif" ? whatIfState ?? socket.state : socket.state;
+  // Equal full-state WS frames must not cause duplicate HTTP requests. Including
+  // the request key on results also prevents stale paths flashing after a change.
+  const snapshotKey = displayedState ? JSON.stringify(displayedState) : "";
+  const routeKey = routeConfig && snapshotKey ? JSON.stringify({ ...routeConfig, state: displayedState }) : "";
+  const routeResult = routeResponse?.key === routeKey ? routeResponse.result : null;
+  const power = powerResponse?.key === snapshotKey ? powerResponse.result : null;
+
+  useEffect(() => {
+    if (!graph) return;
+    const origin = graph.nodes.find((node) => node.kind === "depot")?.id;
+    const destination = graph.hospitals[0]?.node_id;
+    setRouteConfig(origin && destination ? { vehicle_type: "ambulance", origin, destination_node: destination } : null);
+    setSelectedItems([]);
+    setSelection(null);
+    setWhatIfState(null);
+  }, [graph]);
+
+  useEffect(() => {
+    if (!routeKey) return;
+    let active = true;
+    void api.vehicleRoute(JSON.parse(routeKey)).then((result) => {
+      if (active) setRouteResponse({ key: routeKey, result });
+    }).catch((error: unknown) => {
+      if (active) setRouteResponse({ key: routeKey, result: { answer: String(error) } });
+    });
+    return () => { active = false; };
+  }, [routeKey]);
+
+  useEffect(() => {
+    if (!snapshotKey) return;
+    let active = true;
+    void api.previewPower(JSON.parse(snapshotKey)).then((result) => {
+      if (active) setPowerResponse({ key: snapshotKey, result });
+    }).catch(() => { if (active) setPowerResponse(null); });
+    return () => { active = false; };
+  }, [snapshotKey]);
 
   useEffect(() => {
     api
@@ -142,23 +186,18 @@ export default function App() {
     refreshAll();
   }, [refreshAll]);
 
-  const selectEntity = useCallback(async (next: MapSelection | null) => {
+  const selectEntity = useCallback(async (next: MapSelection | null, additive = false) => {
     setSelection(next);
+    setSelectedItems((current) => !next ? [] : !additive ? [next]
+      : current.some((item) => item.id === next.id) ? current.filter((item) => item.id !== next.id) : [...current, next]);
     setSelectedHospital(null);
     setDiagnostics(null);
-    setRouteResult(null);
     if (!next) return;
     if (next.type === "hospital") {
       try {
         setSelectedHospital(await api.hospital(next.id));
       } catch {
         /* hospital details are optional for imported maps */
-      }
-    } else if (next.type === "substation") {
-      try {
-        setDiagnostics(await api.diagnostics("power"));
-      } catch {
-        /* backend offline */
       }
     } else if (["pipeline", "waterway", "water_works", "wastewater_plant"].includes(next.type)) {
       try {
@@ -179,7 +218,7 @@ export default function App() {
 
   const runCommand = async (overrideText?: string) => {
     const text = (overrideText ?? commandText).trim();
-    if (!text) return;
+    if (!text || commandBusy) return;
     if (overrideText) setCommandText(overrideText);
     setCommandBusy(true);
     try {
@@ -187,7 +226,9 @@ export default function App() {
         text,
         start_from: "current",
         selected_entity_id: selection?.id,
+        selected_entity_ids: selection ? [selection.id] : [],
         selected_entity_type: selection?.type,
+        base_state: displayedState,
       });
       setCommandResult(result);
       const after = result.after_state as CitySnapshot | undefined;
@@ -221,19 +262,28 @@ export default function App() {
     }
   };
 
-  const routeVehicle = async (vehicleType: "firetruck" | "police" | "ambulance") => {
-    if (!selection) return;
-    const body: { vehicle_type: typeof vehicleType; hospital_id?: string; destination_node?: string; incident_edge_id?: string } = { vehicle_type: vehicleType };
-    if (selection.type === "hospital") body.hospital_id = selection.id;
-    else if (selection.type === "edge") {
-      const edge = graph?.edges.find((item) => item.id === selection.id);
-      body.destination_node = edge?.src;
-      body.incident_edge_id = selection.id;
-    } else body.destination_node = selection.id;
+  const calculateRoute = (vehicleType: RouteRequest["vehicle_type"]) => {
+    const origin = routeConfig?.origin ?? graph?.nodes.find((node) => node.kind === "depot")?.id;
+    const destination = selection?.type === "hospital"
+      ? graph?.hospitals.find((hospital) => hospital.id === selection.id)?.node_id
+      : vehicleType === "ambulance" ? graph?.hospitals[0]?.node_id
+      : graph?.edges.find((edge) => edge.id === selection?.id)?.src ?? selection?.id;
+    if (origin && destination) setRouteConfig({ vehicle_type: vehicleType, origin, destination_node: destination });
+  };
+
+  const previewHazards = async (hazards: Array<Record<string, unknown>>) => {
+    if (commandBusy) return;
+    setCommandBusy(true);
     try {
-      setRouteResult(await api.vehicleRoute(body));
+      const result = await api.runSimulation({ start_from: "current", base_state: displayedState, hazards });
+      setWhatIfState(result.after_state as CitySnapshot);
+      setViewMode("whatif");
+      setCommandResult(result);
     } catch (error) {
-      setRouteResult({ answer: error instanceof Error ? error.message : "Route calculation failed" });
+      setCommandResult({ answer: error instanceof Error ? error.message : "Simulation failed" });
+      throw error;
+    } finally {
+      setCommandBusy(false);
     }
   };
 
@@ -350,19 +400,26 @@ export default function App() {
             viewMode={viewMode}
             onSelect={selectEntity}
             selectedId={selection?.id}
+            routeResult={routeResult}
+            selectedIds={selectedItems.map((item) => item.id)}
+            outageNodeIds={power?.affected_nodes ?? []}
             layers={layers}
           />
         </div>
         <div className="col col-right">
+          <SimulationPanel graph={graph} selectedItems={selectedItems} onSelectionChange={setSelectedItems}
+            busy={commandBusy} onPreview={previewHazards} power={power} routeConfig={routeConfig}
+            onRouteChange={setRouteConfig} routeResult={routeResult} viewMode={viewMode}
+            onClearPreview={() => { setWhatIfState(null); setViewMode("present"); }} />
           <ControlPanel
             graph={graph}
             selection={selection}
             hospital={selectedHospital}
-            diagnostics={diagnostics}
+            diagnostics={selection?.type === "substation" && power ? { ...power } : diagnostics}
             routeResult={routeResult}
             onQuickCommand={quickCommand}
             onPreviewSelection={previewSelection}
-            onRoute={routeVehicle}
+             onRoute={calculateRoute}
           />
           <PlanPanel plan={plan} onAction={refreshAll} />
         </div>

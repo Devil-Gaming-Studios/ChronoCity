@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import heapq
+import math
 
 from ..models import Action, CityGraph, CitySnapshot
 
@@ -15,6 +16,7 @@ def initial_state(graph: CityGraph) -> CitySnapshot:
         snap.powered[f.id] = True
     for sub in graph.substations:
         snap.power_load_mw[sub.id] = round(sub.capacity_mw * 0.65, 2)
+        snap.power_generation_mw[sub.id] = round(sub.generation_mw, 2)
     for asset in graph.infrastructure:
         if asset.kind in {"pipeline", "waterway", "water_works", "wastewater_plant"}:
             snap.water_pressure_kpa[asset.id] = 350.0
@@ -23,6 +25,45 @@ def initial_state(graph: CityGraph) -> CitySnapshot:
         snap.signal_timing_s[s.id] = 60.0
     refresh_travel(snap, graph)
     return snap
+
+
+def pipeline_pressure_classification(pressure_kpa: float) -> str:
+    """Illustrative simulator thresholds, not a physical diagnosis."""
+    if not math.isfinite(pressure_kpa) or not 0 <= pressure_kpa <= 1000:
+        raise ValueError("pressure_kpa must be finite and between 0 and 1000")
+    return "burst" if pressure_kpa < 20 else "probable_leak" if pressure_kpa < 150 else "normal"
+
+
+def pipeline_affected_edges(graph: CityGraph, asset_id: str) -> list[str]:
+    """Only explicitly tagged, known road relationships are supported."""
+    asset = next((item for item in graph.infrastructure if item.id == asset_id and item.kind == "pipeline"), None)
+    if asset is None:
+        raise ValueError("pipeline asset not found")
+    tagged = {part.strip() for part in asset.tags.get("affected_edge", "").split(",") if part.strip()}
+    return sorted(edge.id for edge in graph.edges if edge.id in tagged and edge.kind in {"road", "underpass"})
+
+
+def preview_pipeline_pressure(state: CitySnapshot, graph: CityGraph, asset_id: str, pressure_kpa: float) -> CitySnapshot:
+    """A what-if failure hypothesis. Pressure alone is never proof of a real leak.
+
+    Normal pressure does not repair a previously simulated break or drain roads;
+    those remain explicit repair/clear-flood actions in the existing simulator.
+    """
+    affected = pipeline_affected_edges(graph, asset_id)
+    classification = pipeline_pressure_classification(pressure_kpa)
+    after = state.model_copy(deep=True)
+    after.water_pressure_kpa[asset_id] = pressure_kpa
+    if classification != "normal":
+        reason = "simulated burst" if classification == "burst" else "simulated probable leak"
+        # Do not relabel an existing structural break as merely probable.
+        previous = after.water_failures.get(asset_id)
+        if previous not in {"pipe break", "simulated burst"}:
+            after.water_failures[asset_id] = reason
+            after.failed_assets[asset_id] = reason
+        depth = 100.0 if classification == "burst" else 25.0
+        for edge_id in affected:
+            after.flooded_edges[edge_id] = max(after.flooded_edges.get(edge_id, 0.0), depth)
+    return refresh_travel(after, graph)
 
 
 def refresh_travel(state: CitySnapshot, graph: CityGraph) -> CitySnapshot:
@@ -51,6 +92,30 @@ def refresh_travel(state: CitySnapshot, graph: CityGraph) -> CitySnapshot:
     return state
 
 
+def _update_station_supply(state: CitySnapshot, graph: CityGraph, sid: str) -> None:
+    """Simple all-or-nothing supply model, preserving explicit breaker trips."""
+    sub = next((item for item in graph.substations if item.id == sid), None)
+    if sub is None:
+        return
+    previous = state.failed_assets.get(sid)
+    if previous not in {None, "overload", "generation shortfall"}:
+        return
+    load = state.power_load_mw.get(sid, 0.0)
+    supply = state.power_generation_mw.get(sid, sub.generation_mw)
+    reason = "overload" if load > sub.capacity_mw else "generation shortfall" if supply < load else None
+    if reason:
+        state.failed_assets[sid] = reason
+    elif previous:
+        state.failed_assets.pop(sid, None)
+    # Do not undo an independently shed feeder when changing a healthy reading.
+    if reason or previous:
+        for fid in sub.feeders:
+            state.powered[fid] = reason is None
+            for sig in graph.signals:
+                if sig.feeder_id == fid:
+                    state.signals_ok[sig.id] = reason is None and not state.failed_assets.get(sig.node_id)
+
+
 def apply_action(state: CitySnapshot, graph: CityGraph, action: Action) -> CitySnapshot:
     """Return a NEW snapshot with one action applied. Pure & deterministic.
 
@@ -70,25 +135,27 @@ def apply_action(state: CitySnapshot, graph: CityGraph, action: Action) -> CityS
                     s.powered[fid] = on
                     for sig in graph.signals:
                         if sig.feeder_id == fid:
-                            s.signals_ok[sig.id] = on
+                            s.signals_ok[sig.id] = on and not s.failed_assets.get(sig.node_id)
                 if on:
                     s.failed_assets.pop(sid, None)
                 else:
                     s.failed_assets[sid] = "substation trip"
+        if on:
+            _update_station_supply(s, graph, sid)
         refresh_travel(s, graph)
 
     elif tool == "power.set_load":
         sid = p.get("substation_id") or (action.entity_ids[0] if action.entity_ids else "")
         load = max(0.0, float(p.get("load_mw", 0.0)))
         s.power_load_mw[sid] = load
-        sub = next((item for item in graph.substations if item.id == sid), None)
-        if sub and load > sub.capacity_mw:
-            s.failed_assets[sid] = "overload"
-            for fid in sub.feeders:
-                s.powered[fid] = False
-                for sig in graph.signals:
-                    if sig.feeder_id == fid:
-                        s.signals_ok[sig.id] = False
+        _update_station_supply(s, graph, sid)
+        refresh_travel(s, graph)
+
+    elif tool == "power.set_generation":
+        sid = p.get("substation_id") or (action.entity_ids[0] if action.entity_ids else "")
+        generation = max(0.0, float(p.get("generation_mw", 0.0)))
+        s.power_generation_mw[sid] = generation
+        _update_station_supply(s, graph, sid)
         refresh_travel(s, graph)
 
     elif tool == "power.break_line":
@@ -140,6 +207,23 @@ def apply_action(state: CitySnapshot, graph: CityGraph, action: Action) -> CityS
 
     elif tool == "traffic.close_edge":
         s.closed_edges[p.get("edge_id", "")] = True
+        refresh_travel(s, graph)
+
+    elif tool in {"traffic.disable_node", "traffic.flood_node"}:
+        node_ids = [str(node_id) for node_id in p.get("node_ids", action.entity_ids)]
+        depth = float(p.get("depth_cm", 100.0))
+        for edge in graph.edges:
+            if edge.kind not in {"road", "underpass"} or not ({edge.src, edge.dst} & set(node_ids)):
+                continue
+            if tool == "traffic.flood_node":
+                s.flooded_edges[edge.id] = depth
+            else:
+                s.closed_edges[edge.id] = True
+        for node_id in node_ids:
+            s.failed_assets[node_id] = "node flooded" if tool == "traffic.flood_node" else "node disabled"
+            for sig in graph.signals:
+                if sig.node_id == node_id:
+                    s.signals_ok[sig.id] = False
         refresh_travel(s, graph)
 
     elif tool == "traffic.set_congestion":
@@ -212,6 +296,8 @@ def reachable_travel_time(state: CitySnapshot, graph: CityGraph, src: str, dst: 
     """Dijkstra over live edge travel times. Blocked edges (9999) are avoided."""
     adj: dict[str, list[tuple[str, str]]] = {}
     for e in graph.edges:
+        if e.kind == "feeder":
+            continue
         adj.setdefault(e.src, []).append((e.dst, e.id))
         adj.setdefault(e.dst, []).append((e.src, e.id))
 
@@ -257,4 +343,4 @@ def advance_tick(state: CitySnapshot, graph: CityGraph, seconds: float = 1.0) ->
     return s
 
 
-__all__ = ["initial_state", "apply_action", "advance_tick", "reachable_travel_time", "refresh_travel", "GRIDLOCK_FACTOR", "BLOCKED_S"]
+__all__ = ["initial_state", "apply_action", "advance_tick", "reachable_travel_time", "refresh_travel", "pipeline_pressure_classification", "pipeline_affected_edges", "preview_pipeline_pressure", "GRIDLOCK_FACTOR", "BLOCKED_S"]

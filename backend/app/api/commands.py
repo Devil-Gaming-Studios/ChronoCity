@@ -4,9 +4,10 @@ import re
 from typing import Any
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from ..models import CitySnapshot
 
-from .simulations import SimulationRequest, run_simulation
+from .simulations import HazardRequest, SimulationRequest, run_simulation
 
 router = APIRouter(prefix="/api/commands", tags=["commands"])
 
@@ -15,7 +16,9 @@ class CommandRequest(BaseModel):
     text: str
     start_from: str = "healthy"
     selected_entity_id: str | None = None
+    selected_entity_ids: list[str] = Field(default_factory=list)
     selected_entity_type: str | None = None
+    base_state: CitySnapshot | None = None
 
 
 def _number(pattern: str, text: str) -> float | None:
@@ -31,6 +34,9 @@ def parse_command(body: CommandRequest) -> tuple[dict[str, Any], SimulationReque
 
     hazards: list[dict[str, Any]] = []
     parsed: dict[str, Any] = {"text": text}
+    selected_ids = list(dict.fromkeys(body.selected_entity_ids or ([body.selected_entity_id] if body.selected_entity_id else [])))
+    list_match = re.search(r"(?:roads?|edges?|nodes?|stations?|substations?)\s+([A-Za-z0-9_.:-]+(?:\s*,\s*[A-Za-z0-9_.:-]+)+)", text, re.IGNORECASE)
+    mentioned_ids = [item.strip() for item in list_match.group(1).split(",")] if list_match else []
     rain = _number(r"(\d+(?:\.\d+)?)\s*mm", text)
     if "rain" in lowered or "rainfall" in lowered:
         if rain is None:
@@ -40,13 +46,30 @@ def parse_command(body: CommandRequest) -> tuple[dict[str, Any], SimulationReque
         parsed.update({"intent": "rain", "rain_mm": rain, "duration_min": duration})
     else:
         station_match = re.search(r"(?:substation|station)\s+([A-Za-z0-9_.-]+)", text, re.IGNORECASE)
-        load = _number(r"(\d+(?:\.\d+)?)\s*(?:mw|megawatts?)", text)
+        load = _number(r"(-?\d+(?:\.\d+)?)\s*(?:mw|megawatts?)", text)
+        if load is not None and load < 0:
+            return {"ok": False, "answer": "Power readings must be zero or greater."}, None
         if ("trip" in lowered or "outage" in lowered or "offline" in lowered) and station_match:
             hazards.append({"type": "power_outage", "substation_id": station_match.group(1), "label": text})
             parsed.update({"intent": "power_outage", "substation_id": station_match.group(1)})
+        elif ("generation" in lowered or "produced" in lowered or "output" in lowered) and station_match and load is not None:
+            hazards.append({"type": "power_generation", "substation_id": station_match.group(1), "generation_mw": load, "label": text})
+            parsed.update({"intent": "power_generation", "substation_id": station_match.group(1), "generation_mw": load})
         elif ("power" in lowered or "load" in lowered) and station_match and load is not None:
             hazards.append({"type": "power_overload", "substation_id": station_match.group(1), "load_mw": load, "label": text})
             parsed.update({"intent": "power_overload", "substation_id": station_match.group(1), "load_mw": load})
+        elif ("flood" in lowered or "flooding" in lowered) and (mentioned_ids or selected_ids):
+            ids = mentioned_ids or selected_ids
+            if "node" in lowered or "junction" in lowered or body.selected_entity_type in {"junction", "node", "depot", "hospital", "shelter"}:
+                depth = _number(r"(\d+(?:\.\d+)?)\s*cm", text) or 100.0
+                hazards.append({"type": "flood_node", "node_ids": ids, "depth_cm": depth, "label": text})
+                parsed.update({"intent": "flood_node", "node_ids": ids, "depth_cm": depth})
+            else:
+                if not mentioned_ids and body.selected_entity_type not in {"edge", "road", "underpass"}:
+                    return {"ok": False, "answer": "Select roads or road nodes to flood."}, None
+                depth = _number(r"(\d+(?:\.\d+)?)\s*cm", text) or 100.0
+                hazards.append({"type": "flood", "edge_ids": ids, "depth_cm": depth, "label": text})
+                parsed.update({"intent": "flood", "edge_ids": ids, "depth_cm": depth})
         elif ("flood" in lowered or "flooding" in lowered) and body.selected_entity_id:
             if body.selected_entity_type not in {"edge", "road", "underpass"}:
                 return {"ok": False, "answer": "Flooding can only be applied to a selected road.", "suggestions": ["select a road", "heavy traffic on the selected road"]}, None
@@ -75,14 +98,25 @@ def parse_command(body: CommandRequest) -> tuple[dict[str, Any], SimulationReque
                 return {"ok": False, "answer": "Select a water asset in the 3D map or include its asset ID.", "suggestions": ["break pipe ASSET_ID", "heavy traffic on the selected road"]}, None
             hazards.append({"type": "water_pipe_break", "asset_id": asset_id, "label": text})
             parsed.update({"intent": "water_pipe_break", "asset_id": asset_id})
+        elif ("disable" in lowered or "close" in lowered) and (mentioned_ids or len(selected_ids) > 1):
+            ids = mentioned_ids or selected_ids
+            if "node" in lowered or "junction" in lowered or body.selected_entity_type in {"junction", "node", "depot", "hospital", "shelter"}:
+                hazards.append({"type": "disable_node", "node_ids": ids, "label": text})
+                parsed.update({"intent": "disable_node", "node_ids": ids})
+            else:
+                hazards.append({"type": "close_edge", "edge_ids": ids, "label": text})
+                parsed.update({"intent": "close_edge", "edge_ids": ids})
         elif "disable" in lowered or "close" in lowered:
-            entity_id = body.selected_entity_id or (re.search(r"(?:edge|road)\s+([A-Za-z0-9_.:-]+)", text, re.IGNORECASE) or [None, None])[1]
+            entity_id = selected_ids[0] if selected_ids else (re.search(r"(?:edge|road)\s+([A-Za-z0-9_.:-]+)", text, re.IGNORECASE) or [None, None])[1]
             entity_type = body.selected_entity_type or "edge"
             if not entity_id:
                 return {"ok": False, "answer": "Select a map feature first, or say 'disable edge EDGE_ID'.", "suggestions": ["disable selected feature", "disable edge EDGE_ID"]}, None
             if entity_type == "substation":
                 hazards.append({"type": "power_outage", "substation_id": entity_id, "label": text})
                 parsed.update({"intent": "power_outage", "substation_id": entity_id})
+            elif entity_type in {"junction", "node", "depot", "hospital", "shelter"}:
+                hazards.append({"type": "disable_node", "node_ids": [entity_id], "label": text})
+                parsed.update({"intent": "disable_node", "node_ids": [entity_id]})
             elif entity_type == "power_line":
                 hazards.append({"type": "power_wire_break", "asset_id": entity_id, "label": text})
                 parsed.update({"intent": "power_wire_break", "asset_id": entity_id})
@@ -95,7 +129,7 @@ def parse_command(body: CommandRequest) -> tuple[dict[str, Any], SimulationReque
         else:
             return {"ok": False, "answer": "I could not map that command to a safe simulation input.", "suggestions": ["rain 120 mm", "trip substation S2", "set substation S2 load to 45 MW", "disable selected feature", "heavy traffic on the selected road"]}, None
 
-    return parsed, SimulationRequest(label=text, start_from="current" if body.start_from == "current" else "healthy", hazards=hazards)
+    return parsed, SimulationRequest(label=text, start_from="current" if body.start_from == "current" else "healthy", hazards=[HazardRequest.model_validate(h) for h in hazards], base_state=body.base_state)
 
 
 @router.post("/run")

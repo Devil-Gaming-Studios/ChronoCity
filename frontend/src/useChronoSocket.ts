@@ -41,7 +41,7 @@ export function useChronoSocket(onEvent?: (e: ChronoEvent) => void): ChronoSocke
             kind: String(raw.kind ?? "message"),
           };
           if (e.kind === "hello" && e.state) setState(e.state as CitySnapshot);
-          if (e.kind === "state" && e.state) setState(e.state as CitySnapshot);
+          if ((e.kind === "state" || e.kind === "state_delta") && e.state) setState(e.state as CitySnapshot);
           setEvents((prev) => [...prev.slice(-199), e]);
           handler.current?.(e);
         } catch {
