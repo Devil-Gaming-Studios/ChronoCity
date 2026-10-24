@@ -14,6 +14,7 @@ interface Props {
   viewMode: ViewMode;
   onSelect?: (selection: MapSelection | null) => void;
   selectedId?: string | null;
+  layers?: { power: boolean; traffic: boolean; emergency: boolean; reports: boolean };
 }
 
 interface Handles {
@@ -177,7 +178,7 @@ function addPark(scene: THREE.Scene, x: number, z: number, width: number, depth:
   addTree(scene, x + width * 0.05, z - depth * 0.32, 0.55);
 }
 
-export default function TwinScene({ graph, state, beforeState, whatIfState, cascade, viewMode, onSelect, selectedId }: Props) {
+export default function TwinScene({ graph, state, beforeState, whatIfState, cascade, viewMode, onSelect, selectedId, layers = { power: true, traffic: true, emergency: true, reports: true } }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
@@ -435,6 +436,8 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
     }
 
     for (const asset of graph.infrastructure ?? []) {
+      if (asset.kind === "power_line" && !layers.power) continue;
+      if (asset.kind !== "power_line" && !layers.traffic) continue;
       const color = asset.kind === "power_line" ? 0xf59e0b : asset.kind === "waterway" ? 0x38bdf8 : 0x60a5fa;
       const points = asset.geometry.map(([x, y]) => toWorld(x, y));
       for (let index = 0; index < points.length - 1; index += 1) {
@@ -490,6 +493,8 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
 
     // Nodes and recognizable city services.
     for (const n of graph.nodes) {
+      if ((n.kind === "hospital" || n.kind === "depot" || n.kind === "shelter") && !layers.emergency) continue;
+      if (n.kind === "substation" && !layers.power) continue;
       const [x, z] = toWorld(n.x, n.y);
       let mesh: THREE.Mesh;
       if (n.kind === "hospital") {
@@ -582,7 +587,7 @@ export default function TwinScene({ graph, state, beforeState, whatIfState, casc
     controls.minDistance = Math.max(3.5, span * 0.55);
     controls.maxDistance = Math.max(18, span * 5);
     controls.update();
-  }, [graph]);
+  }, [graph, layers.emergency, layers.power, layers.traffic]);
 
   // ---------- repaint on state / cascade / view-mode change ----------
   useEffect(() => {

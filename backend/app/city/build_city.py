@@ -10,6 +10,7 @@ from ..models import (
     HospitalDepartment,
     Node,
     Signal,
+    Shelter,
     Substation,
     Underpass,
 )
@@ -46,6 +47,7 @@ def build_demo_city() -> CityGraph:
         Node(id="S1", kind="substation", x=1, y=3, zone="Z1", name="Substation S1"),
         Node(id="S2", kind="substation", x=5, y=-1, zone="Z2", name="Substation S2"),
         Node(id="DEPOT", kind="depot", x=-1, y=1, zone="Z0", name="Ambulance Depot"),
+        Node(id="SH1", kind="shelter", x=0, y=-1, zone="Z2", name="Riverside Shelter"),
     ]
 
     def road(eid: str, src: str, dst: str, length: float, kind: str = "road") -> Edge:
@@ -69,6 +71,7 @@ def build_demo_city() -> CityGraph:
         road("E_N5_J6", "N5", "J6", 200),
         road("E_J8_H1", "J8", "H1", 200),
         road("E_DEPOT_J1", "DEPOT", "J1", 150),
+        road("E_SH1_N5", "SH1", "N5", 180),
         # utility connectors keep the infrastructure graph connected without
         # changing the road topology used for ordinary route planning.
         road("E_S1_N6", "S1", "N6", 100, kind="feeder"),
@@ -114,6 +117,7 @@ def build_demo_city() -> CityGraph:
         )
     ]
     underpasses = [Underpass(id="U1", edge_id="E_J4_J6_U1", name="River Road Underpass")]
+    shelters = [Shelter(id="SH1", node_id="SH1", name="Riverside Shelter", capacity=250, available=250)]
 
     return CityGraph(
         nodes=nodes,
@@ -122,6 +126,7 @@ def build_demo_city() -> CityGraph:
         feeders=feeders,
         signals=signals,
         hospitals=hospitals,
+        shelters=shelters,
         underpasses=underpasses,
         source="demo",
         source_ref="built-in",

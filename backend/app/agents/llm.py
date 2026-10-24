@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 from typing import Any
 
@@ -23,6 +25,10 @@ class LLMClient:
         self.budget = settings.llm_call_budget
         self.calls_used = 0
         self._call_log: list[dict[str, Any]] = []
+        self._cache: dict[str, str] = {}
+        self._queue = asyncio.Semaphore(4)
+        self.cache_hits = 0
+        self.fallbacks = 0
 
     def reset_budget(self) -> None:
         self.calls_used = 0
@@ -40,24 +46,41 @@ class LLMClient:
             "calls_used": self.calls_used,
             "budget": self.budget,
             "log": list(self._call_log),
+            "cache_hits": self.cache_hits,
+            "fallbacks": self.fallbacks,
+            "queue_capacity": 4,
         }
 
     async def complete(self, agent: str, prompt: str, *, schema_hint: str = "") -> str:
-        """Return raw model text for a prompt. In scripted mode this is canned."""
+        """Single gateway for model calls with queueing, cache, budget, and fallback."""
+        key = hashlib.sha256(f"{self.mode}|{agent}|{schema_hint}|{prompt}".encode()).hexdigest()
+        if key in self._cache:
+            self.cache_hits += 1
+            return self._cache[key]
         if not self.budget_ok():
             self._record(agent, "budget_exhausted", ok=False)
             return json.dumps({"error": "budget_exhausted"})
 
-        self._record(agent, "complete")
-        if self.mode == "scripted":
-            return _scripted(agent, prompt)
-        if self.mode == "ollama":
-            return await self._ollama(prompt)
-        if self.mode == "gemini":
-            return await self._gemini(prompt)
-        if self.mode == "claude":
-            return await self._claude(prompt)
-        return _scripted(agent, prompt)
+        async with self._queue:
+            self._record(agent, "complete")
+            try:
+                if self.mode == "scripted":
+                    out = _scripted(agent, prompt)
+                elif self.mode == "ollama":
+                    out = await self._ollama(prompt)
+                elif self.mode == "gemini":
+                    out = await self._gemini(prompt)
+                elif self.mode == "claude":
+                    out = await self._claude(prompt)
+                else:
+                    out = _scripted(agent, prompt)
+                if out.startswith('{"error"'):
+                    raise RuntimeError(out)
+            except Exception:
+                self.fallbacks += 1
+                out = _scripted(agent, prompt) if settings.llm_fallback_mode == "scripted" else await self._ollama(prompt)
+            self._cache[key] = out
+            return out
 
     async def _ollama(self, prompt: str) -> str:
         import httpx

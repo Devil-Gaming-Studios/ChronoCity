@@ -42,3 +42,21 @@ def test_demo_hospital_has_department_capacity():
     hospital = build_demo_city().hospitals[0]
     assert hospital.departments
     assert sum(item.available_beds for item in hospital.departments) > 0
+
+
+def test_heavy_traffic_command_targets_selected_road(graph, healthy):
+    parsed, sim = parse_command(
+        CommandRequest(
+            text="heavy traffic on the selected road",
+            selected_entity_id="E_J4_J6_U1",
+            selected_entity_type="edge",
+        )
+    )
+    assert parsed["intent"] == "heavy_traffic"
+    assert sim is not None and sim.hazards[0].type == "heavy_traffic"
+
+    from app.api.simulations import _hazard_actions
+    actions = _hazard_actions(sim.hazards[0], graph)
+    updated = apply_action(healthy, graph, actions[0])
+    assert updated.edge_factor["E_J4_J6_U1"] == 2.0
+    assert updated.edge_travel_s["E_J4_J6_U1"] > healthy.edge_travel_s["E_J4_J6_U1"]

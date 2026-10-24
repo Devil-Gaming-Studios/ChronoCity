@@ -43,6 +43,7 @@ class Aggregator:
                     if e not in entity_ids:
                         entity_ids.append(e)
             sources = {s.source for s in sigs}
+            source_counts = {source: sum(1 for sig in sigs if sig.source == source) for source in sources}
             severity = _severity(kind, max(values) if values else 0.0)
             out.append(
                 {
@@ -55,6 +56,9 @@ class Aggregator:
                     "trust": combine_trust(trusts),
                     "entity_ids": entity_ids,
                     "sources": sorted(sources),
+                    "source_counts": source_counts,
+                    "report_count": source_counts.get("report", 0),
+                    "sensor_count": source_counts.get("sensor", 0),
                     "severity": severity.value,
                     "ts": now,
                 }

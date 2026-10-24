@@ -49,6 +49,8 @@ def validate_report(raw: dict[str, Any]) -> ValidatedSignal | None:
         value=1.0,
         entity_ids=[],
         trust=trust,
+        lat=rep.lat,
+        lon=rep.lon,
         ts=rep.ts,
     )
 

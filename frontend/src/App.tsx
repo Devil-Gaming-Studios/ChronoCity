@@ -41,6 +41,8 @@ export default function App() {
   const [commandBusy, setCommandBusy] = useState(false);
   const [commandResult, setCommandResult] = useState<Record<string, unknown> | null>(null);
   const [routeResult, setRouteResult] = useState<Record<string, unknown> | null>(null);
+  const [approvalBusy, setApprovalBusy] = useState(false);
+  const [layers, setLayers] = useState({ power: true, traffic: true, emergency: true, reports: true });
 
   const refreshIncidents = useCallback(async () => {
     try {
@@ -79,6 +81,7 @@ export default function App() {
   const onEvent = useCallback(
     (e: ChronoEvent) => {
       switch (e.kind) {
+        case "state_delta":
         case "state": {
           const scenario = e.scenario as string | undefined;
           const st = e.state as CitySnapshot | undefined;
@@ -105,6 +108,22 @@ export default function App() {
         case "incident":
           refreshIncidents();
           refreshMetrics();
+          break;
+        case "approval":
+          refreshPlan();
+          refreshMetrics();
+          break;
+        case "command_response":
+          setCommandResult({
+            answer: e.answer,
+            explanation: Array.isArray(e.explanation) ? e.explanation : [],
+            affected_nodes: e.affected_nodes,
+            affected_assets: e.affected_assets,
+          });
+          break;
+        case "command_error":
+        case "command_rejected":
+          setCommandResult({ answer: String(e.detail ?? e.answer ?? "Command could not be processed.") });
           break;
         default:
           break;
@@ -150,34 +169,22 @@ export default function App() {
     }
   }, []);
 
-  const applyPreview = async (hazards: Array<Record<string, unknown>>, label: string) => {
-    try {
-      const result = await api.runSimulation({ label, start_from: "current", hazards });
-      setCommandResult(result);
-      const after = result.after_state as CitySnapshot | undefined;
-      if (after) {
-        setWhatIfState(after);
-        setViewMode("whatif");
-      }
-    } catch (error) {
-      setCommandResult({ answer: error instanceof Error ? error.message : "Simulation failed" });
-    }
-  };
-
   const previewSelection = () => {
     if (!selection) return;
-    if (selection.type === "edge") void applyPreview([{ type: "close_edge", edge_id: selection.id }], `Disable ${selection.label}`);
-    else if (selection.type === "substation") void applyPreview([{ type: "power_outage", substation_id: selection.id }], `Trip ${selection.label}`);
-    else if (selection.type === "power_line") void applyPreview([{ type: "power_wire_break", asset_id: selection.id }], `Break ${selection.label}`);
-    else if (["pipeline", "waterway", "water_works", "wastewater_plant"].includes(selection.type)) void applyPreview([{ type: "water_pipe_break", asset_id: selection.id }], `Break ${selection.label}`);
+    if (selection.type === "edge" || selection.type === "underpass") quickCommand("close the selected road");
+    else if (selection.type === "substation") quickCommand("disable selected feature");
+    else if (selection.type === "power_line") quickCommand("break the selected power line");
+    else if (["pipeline", "waterway", "water_works", "wastewater_plant"].includes(selection.type)) quickCommand("break the selected water pipe");
   };
 
-  const runCommand = async () => {
-    if (!commandText.trim()) return;
+  const runCommand = async (overrideText?: string) => {
+    const text = (overrideText ?? commandText).trim();
+    if (!text) return;
+    if (overrideText) setCommandText(overrideText);
     setCommandBusy(true);
     try {
       const result = await api.runCommand({
-        text: commandText,
+        text,
         start_from: "current",
         selected_entity_id: selection?.id,
         selected_entity_type: selection?.type,
@@ -188,8 +195,29 @@ export default function App() {
         setWhatIfState(after);
         setViewMode("whatif");
       }
+    } catch (error) {
+      setCommandResult({ answer: error instanceof Error ? error.message : "Command failed." });
     } finally {
       setCommandBusy(false);
+    }
+  };
+
+  const quickCommand = (text: string) => { void runCommand(text); };
+
+  const respondToApproval = async (approved: boolean) => {
+    if (!plan) return;
+    setApprovalBusy(true);
+    try {
+      const result = await api.approve(plan.id, approved, approved ? "Approved from agent chat" : "Rejected from agent chat");
+      if (result?.ok === false) {
+        throw new Error(String(result.error ?? "Approval request failed."));
+      }
+      await refreshPlan();
+      setCommandResult({ answer: approved ? "Plan approved. Execute it from the plan panel when ready." : "Plan rejected. No actions were executed." });
+    } catch (error) {
+      setCommandResult({ answer: error instanceof Error ? error.message : "Approval request failed." });
+    } finally {
+      setApprovalBusy(false);
     }
   };
 
@@ -287,10 +315,30 @@ export default function App() {
         </span>
       </header>
 
+      <div className="layer-toolbar">
+        <span className="muted">Layers</span>
+        {(Object.keys(layers) as Array<keyof typeof layers>).map((layer) => (
+          <button key={layer} className={`btn btn-toggle ${layers[layer] ? "active" : ""}`} onClick={() => setLayers((current) => ({ ...current, [layer]: !current[layer] }))}>
+            {layer[0].toUpperCase() + layer.slice(1)}
+          </button>
+        ))}
+      </div>
       <main className="app-main">
         <div className="col col-left">
           <IncidentPanel incidents={incidents} cascade={cascade} />
-          <ChatterPanel events={socket.events} state={socket.state} />
+          <ChatterPanel
+            events={socket.events}
+            state={socket.state}
+            plan={plan}
+            selection={selection}
+            commandText={commandText}
+            commandBusy={commandBusy}
+            setCommandText={setCommandText}
+            onCommand={(text) => void runCommand(text)}
+            approvalBusy={approvalBusy}
+            onApprove={() => void respondToApproval(true)}
+            onReject={() => void respondToApproval(false)}
+          />
         </div>
         <div className="col col-center">
           <TwinScene
@@ -302,6 +350,7 @@ export default function App() {
             viewMode={viewMode}
             onSelect={selectEntity}
             selectedId={selection?.id}
+            layers={layers}
           />
         </div>
         <div className="col col-right">
@@ -310,12 +359,8 @@ export default function App() {
             selection={selection}
             hospital={selectedHospital}
             diagnostics={diagnostics}
-            commandText={commandText}
-            commandBusy={commandBusy}
-            commandResult={commandResult}
             routeResult={routeResult}
-            setCommandText={setCommandText}
-            onCommand={runCommand}
+            onQuickCommand={quickCommand}
             onPreviewSelection={previewSelection}
             onRoute={routeVehicle}
           />

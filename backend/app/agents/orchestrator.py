@@ -12,6 +12,7 @@ from ..models import (
     PlanStatus,
 )
 from ..sim.state import initial_state
+from ..city.cascade import build_dependency_graph
 
 
 class Orchestrator:
@@ -23,6 +24,7 @@ class Orchestrator:
 
     def __init__(self, graph: CityGraph) -> None:
         self.graph = graph
+        self.dependency_graph = build_dependency_graph(graph)
         self.state: CitySnapshot = initial_state(graph)
         self.baseline: CitySnapshot = initial_state(graph)
         self.incidents: list[Incident] = []
@@ -31,6 +33,9 @@ class Orchestrator:
         self.action_log: list[ActionLogEntry] = []
         self.approvals: list[ApprovalRecord] = []
         self.timeline: list[dict[str, Any]] = []
+        self.watch_alerts: list[dict[str, Any]] = []
+        self.plan_started_ts: float | None = None
+        self.last_plan_duration_s: float | None = None
 
     # ---- incident queue ----
 

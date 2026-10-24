@@ -2,7 +2,7 @@
 
 export interface CityNode {
   id: string;
-  kind: "junction" | "substation" | "hospital" | "depot" | "underpass";
+  kind: "junction" | "substation" | "hospital" | "depot" | "underpass" | "shelter";
   x: number;
   y: number;
   zone: string;

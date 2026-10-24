@@ -72,6 +72,8 @@ def create_app() -> FastAPI:
                                     "id": inc.id, "kind": inc.kind, "title": inc.title,
                                     "severity": inc.severity.value, "zone": inc.zone,
                                 })
+                        app.state.orchestrator.watch_alerts.extend(det.watch_alerts)
+                        det.watch_alerts.clear()
             finally:
                 t1.cancel()
                 t2.cancel()
@@ -94,6 +96,9 @@ def create_app() -> FastAPI:
         task = getattr(app.state, "ingest_task", None)
         if task:
             task.cancel()
+        state_task = getattr(app.state, "state_stream_task", None)
+        if state_task:
+            state_task.cancel()
         bus = app.state.bus
         if hasattr(bus, "stop"):
             try:

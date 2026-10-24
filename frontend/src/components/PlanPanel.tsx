@@ -4,7 +4,7 @@ import { api } from "../api";
 
 interface Props {
   plan: JointPlan | null;
-  onAction: () => void; // refresh after approve/reject/execute
+  onAction: () => void;
 }
 
 const impactClass: Record<Impact, string> = {
@@ -12,6 +12,37 @@ const impactClass: Record<Impact, string> = {
   MEDIUM: "imp imp-med",
   LOW: "imp imp-low",
 };
+
+function actionText(action: Action): string {
+  const id = action.entity_ids[0] ?? "the affected area";
+  switch (action.tool) {
+    case "traffic.close_edge": return `Close road ${id}`;
+    case "traffic.flood_edge": return `Mark road ${id} as flooded`;
+    case "traffic.reroute": return `Redirect traffic away from ${action.params.slow_edge_id ?? id}`;
+    case "traffic.signal_dark": return `Account for failed traffic signals`;
+    case "power.trip_substation": return `Take power station ${action.params.substation_id ?? id} offline`;
+    case "power.restore_substation": return `Restore power station ${action.params.substation_id ?? id}`;
+    case "power.reroute_feeder": return `Restore power by rerouting ${action.params.from_feeder ?? "the feeder"}`;
+    case "power.load_shed": return `Reduce load on non-critical power feeders`;
+    case "power.set_load": return `Set power station ${action.params.substation_id ?? id} load to ${action.params.load_mw ?? "the requested level"} MW`;
+    case "power.break_line": return `Mark power line ${id} as failed`;
+    case "water.break_pipe": return `Mark water asset ${id} as broken`;
+    case "water.set_pressure": return `Adjust water pressure for ${id}`;
+    case "emergency.dispatch": return `Dispatch an ambulance to the hospital`;
+    default: return action.rationale || action.tool.split(".").join(" ");
+  }
+}
+
+function statusText(status: string): string {
+  switch (status) {
+    case "PENDING_APPROVAL": return "Waiting for your approval";
+    case "VERIFIED": return "Checked and ready";
+    case "APPROVED": return "Approved — ready to execute";
+    case "EXECUTED": return "Applied to the city twin";
+    case "FAILED": return "Rejected or failed";
+    default: return "Being prepared";
+  }
+}
 
 function verdictMetrics(plan: JointPlan): string | null {
   const m = plan.metrics ?? {};
@@ -23,6 +54,7 @@ function verdictMetrics(plan: JointPlan): string | null {
 export default function PlanPanel({ plan, onAction }: Props) {
   const [log, setLog] = useState<ActionLogEntry[]>([]);
   const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
 
   const refreshLog = async () => {
     try {
@@ -33,34 +65,18 @@ export default function PlanPanel({ plan, onAction }: Props) {
     }
   };
 
-  useEffect(() => {
-    void refreshLog();
-  }, [plan?.id, plan?.status]);
+  useEffect(() => { void refreshLog(); }, [plan?.id, plan?.status]);
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     try {
       const out = (await fn()) as { ok?: boolean; error?: string };
       const error = out?.error;
-      if (out?.ok === false && error) {
-        setLog((prev) => [
-          {
-            id: `err${Date.now()}`,
-            plan_id: plan?.id ?? "",
-            action_id: "",
-            tool: "api",
-            phase: "approve",
-            actor: "ui",
-            impact: "LOW",
-            ok: false,
-            detail: error,
-            ts: Date.now() / 1000,
-          },
-          ...prev,
-        ]);
-      }
+      setMessage(out?.ok === false ? `Request failed: ${error ?? "unknown error"}` : "Request accepted.");
       onAction();
       await refreshLog();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Request failed.");
     } finally {
       setBusy(false);
     }
@@ -69,123 +85,53 @@ export default function PlanPanel({ plan, onAction }: Props) {
   const approve = () => plan && act(() => api.approve(plan.id, true));
   const reject = () => plan && act(() => api.approve(plan.id, false));
   const execute = () => plan && act(() => api.execute(plan.id));
-
-  if (!plan) {
-    return (
-      <section className="panel">
-        <header className="panel-head">
-          <span>Joint Plan</span>
-        </header>
-        <div className="panel-body">
-          <p className="muted">No plan yet. Trigger a scenario to watch the agents work.</p>
-        </div>
-      </section>
-    );
-  }
-
-  const statusClass =
-    plan.status === "EXECUTED" || plan.status === "VERIFIED"
-      ? "badge-ok"
-      : plan.status === "PENDING_APPROVAL"
-        ? "badge-warn"
-        : plan.status === "FAILED"
-          ? "badge-critical"
-          : "";
-  const metricsLine = verdictMetrics(plan);
+  const removeAction = (actionId: string) => plan && act(() => api.editPlan(plan.id, [actionId]));
 
   return (
-    <section className="panel">
+    <section className="panel plan-panel">
       <header className="panel-head">
-        <span>Joint Plan v{plan.version}</span>
-        <span className={`badge ${statusClass}`}>{plan.status}</span>
+        <span>What the system plans to do</span>
+        {plan && <span className={`badge ${plan.status === "PENDING_APPROVAL" ? "badge-warn" : plan.status === "FAILED" ? "badge-critical" : "badge-ok"}`}>{statusText(plan.status)}</span>}
       </header>
       <div className="panel-body">
-        <p className="plan-summary">{plan.resolution || "Negotiating…"}</p>
-
-        {plan.conflicts.length > 0 && (
-          <div className="conflicts">
-            <h4>Conflicts ({plan.conflicts.length})</h4>
-            {plan.conflicts.map((c) => (
-              <p key={c.id} className="conflict">
-                <span className={`chip chip-${c.kind}`}>{c.kind}</span> {c.description}
-              </p>
-            ))}
-          </div>
-        )}
-
-        {plan.proposals.map((p, i) => (
-          <div key={p.id ?? `${p.agent}-${i}`} className="proposal">
-            <div className="incident-row">
-              <span className="proposal-agent">{p.agent}</span>
-              <span className={`chip chip-${p.domain}`}>{p.domain}</span>
+        {!plan ? <p className="muted">Run a scenario or ask the assistant for a simulation. Any proposed response will appear here in plain language.</p> : (
+          <>
+            <p className="plan-summary">The system reviewed the active incidents and prepared this response:</p>
+            <div className="plan-actions-readable">
+              {plan.actions.length === 0 && <p className="muted">No changes are currently proposed.</p>}
+              {plan.actions.map((action) => (
+                <div key={action.id} className="readable-action">
+                  <span className={impactClass[action.impact]}>{action.impact}</span>
+                  <span>{actionText(action)}</span>
+                  {(plan.status === "PENDING_APPROVAL" || plan.status === "VERIFIED" || plan.status === "REVISED") && <button className="btn btn-small" disabled={busy} onClick={() => removeAction(action.id)}>Remove</button>}
+                </div>
+              ))}
             </div>
-            <p className="muted">{p.summary}</p>
-            <div className="chips">
-              <span className="chip">reads: {p.read_calls.length}</span>
-              <span className="chip">
-                actions: {Array.isArray(p.actions) ? p.actions.length : p.actions}
-              </span>
+
+            {plan.resolution && <div className="plan-note"><strong>Coordination note</strong><div className="muted">{plan.resolution}</div></div>}
+            {plan.critic_feedback && <div className="plan-note"><strong>Safety check</strong><div className="muted">{plan.critic_feedback}</div></div>}
+            {verdictMetrics(plan) && <div className="muted plan-metrics">{verdictMetrics(plan)}</div>}
+
+            <div className="btn-row">
+              {plan.status === "PENDING_APPROVAL" && <>
+                <button className="btn btn-primary" disabled={busy} onClick={approve}>Approve response</button>
+                <button className="btn btn-danger" disabled={busy} onClick={reject}>Reject</button>
+              </>}
+              {plan.status === "APPROVED" && <button className="btn btn-primary" disabled={busy} onClick={execute}>Apply response</button>}
+              {plan.status === "EXECUTED" && <span className="badge badge-ok">Response applied</span>}
+              {plan.status === "VERIFIED" && <span className="muted">No high-impact approval is needed.</span>}
+              {plan.status === "FAILED" && <span className="muted">No action was applied.</span>}
             </div>
-          </div>
-        ))}
+            {message && <p className="muted approval-message">{message}</p>}
 
-        <h4>Actions ({plan.actions.length})</h4>
-        {plan.actions.length === 0 && <p className="muted">All actions dropped in negotiation.</p>}
-        {plan.actions.map((a: Action) => (
-          <div key={a.id} className="action-row">
-            <span className={impactClass[a.impact]}>{a.impact}</span>
-            <code>{a.tool}</code>
-            <span className="muted">{a.owner}</span>
-          </div>
-        ))}
-
-        <div className={`verdict ${plan.status === "FAILED" ? "fail" : "pass"}`}>
-          <div className="incident-row">
-            <span>Critic simulation</span>
-          </div>
-          {metricsLine && <p className="muted">{metricsLine}</p>}
-          {plan.critic_feedback && <p className="verdict-note">{plan.critic_feedback}</p>}
-        </div>
-
-        <div className="btn-row">
-          {plan.status === "PENDING_APPROVAL" && (
-            <>
-              <button className="btn btn-primary" disabled={busy} onClick={approve}>
-                Approve
-              </button>
-              <button className="btn btn-danger" disabled={busy} onClick={reject}>
-                Reject
-              </button>
-            </>
-          )}
-          {plan.status === "APPROVED" && (
-            <button className="btn btn-primary" disabled={busy} onClick={execute}>
-              Execute
-            </button>
-          )}
-          {plan.status === "EXECUTED" && <span className="badge badge-ok">Executed on twin</span>}
-          {plan.status === "VERIFIED" && (
-            <span className="muted">Verified — no HIGH actions, safe to execute</span>
-          )}
-          {["DRAFT", "SUBMITTED", "REVISED"].includes(plan.status) && (
-            <span className="muted">Waiting for verification…</span>
-          )}
-          {plan.status === "FAILED" && <span className="muted">Rejected by operator</span>}
-        </div>
-
-        {log.length > 0 && (
-          <details className="action-log" open>
-            <summary className="muted">Action log</summary>
-            {log.map((e) => (
-              <div key={e.id} className="log-line">
-                <span className="chip">{e.phase}</span>
-                <code>{e.tool}</code>
-                <span className="muted">
-                  {e.ok ? "ok" : "fail"} · {e.actor}
-                </span>
-              </div>
-            ))}
-          </details>
+            <details className="plan-details">
+              <summary className="muted">Show technical details</summary>
+              <div className="chips"><span className="chip">plan version {plan.version}</span><span className="chip">{plan.proposals.length} specialist inputs</span><span className="chip">{plan.conflicts.length} coordination conflicts</span></div>
+              {log.length > 0 && <div className="action-log">
+                {log.map((entry) => <div key={entry.id} className="log-line"><span className="chip">{entry.phase}</span><code>{entry.tool}</code><span className="muted">{entry.ok ? "ok" : "failed"}</span></div>)}
+              </div>}
+            </details>
+          </>
         )}
       </div>
     </section>

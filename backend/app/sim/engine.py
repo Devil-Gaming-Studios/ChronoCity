@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..models import CityGraph, CitySnapshot, JointPlan, SimulationResult
-from .state import apply_action, initial_state, reachable_travel_time
+from .state import advance_tick, apply_action, initial_state, reachable_travel_time
 
 
 def _metrics(state: CitySnapshot, graph: CityGraph, ambulance_edge: str | None) -> dict[str, float]:
@@ -76,6 +76,7 @@ def simulate(
     score = round(0.7 * tt_gain + 0.3 * dark_gain, 4)
 
     contained = _containment_hops(graph, state)
+    jammed = sum(1 for edge in graph.edges if edge.kind == "road" and state.edge_travel_s.get(edge.id, 0.0) > (edge.length_m / (max(edge.free_flow_kph, 1.0) / 3.6)) * 1.4)
     if contained > 2:
         notes.append(f"Cascade reached {contained} hops (>2).")
 
@@ -87,7 +88,8 @@ def simulate(
         baseline_travel_time_s=base_tt if base_tt != float("inf") else -1.0,
         dark_junctions=new_dark,
         contained_hops=contained,
-        blocked_edges=sorted(state.flooded_edges.keys()),
+        jammed_arterials=jammed,
+        blocked_edges=sorted(set(state.flooded_edges) | {eid for eid, closed in state.closed_edges.items() if closed}),
         notes=notes,
         trace=trace,
         final_state=state.model_dump(),
@@ -107,4 +109,12 @@ def _containment_hops(graph: CityGraph, state: CitySnapshot) -> int:
     return int(result.get("contained_hops", 0))
 
 
-__all__ = ["simulate", "initial_state", "apply_action", "reachable_travel_time"]
+def run_ticks(graph: CityGraph, state: CitySnapshot, ticks: int, seconds_per_tick: float = 1.0) -> CitySnapshot:
+    """Fork and advance a snapshot for a discrete-event simulation window."""
+    out = state.model_copy(deep=True)
+    for _ in range(max(0, ticks)):
+        out = advance_tick(out, graph, seconds_per_tick)
+    return out
+
+
+__all__ = ["simulate", "run_ticks", "initial_state", "apply_action", "reachable_travel_time"]

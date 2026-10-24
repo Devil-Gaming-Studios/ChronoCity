@@ -105,6 +105,9 @@ class TrafficAgent(SpecialistBase):
                         rationale=f"Shift traffic off the flooded {edge} onto the {fast} corridor.",
                     )
                 )
+            dark_signals = [signal.id for signal in self.graph.signals if not state.signals_ok.get(signal.id, True)]
+            if dark_signals:
+                actions.append(tr.propose_retime_signals(dark_signals, cycle_s=45.0, rationale="Retiming remaining signals to reduce queue buildup."))
 
         summary = await get_callbacks().guarded_complete(self.name, f"Traffic plan for {incident_ids}")
         get_llm()._record(self.name, "propose")
@@ -138,6 +141,9 @@ class EmergencyAgent(SpecialistBase):
             actions.append(
                 em.propose_set_destination("A1", "H1", rationale="Route to City General.")
             )
+            if self.graph.shelters:
+                shelter = self.graph.shelters[0]
+                actions.append(em.propose_activate_shelter(shelter.id, shelter.available, rationale=f"Activate {shelter.name} as a fallback public shelter."))
 
         summary = await get_callbacks().guarded_complete(self.name, f"Emergency plan for {incident_ids}")
         get_llm()._record(self.name, "propose")

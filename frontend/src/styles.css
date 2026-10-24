@@ -257,6 +257,22 @@ code {
   font-size: 12px;
 }
 
+.chat-approval-card {
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  padding: 9px 10px;
+  margin-bottom: 10px;
+  background: #2b1d08;
+}
+
+.chat-approval-card p {
+  margin: 5px 0 0;
+}
+
+.approval-message {
+  margin: -4px 0 8px;
+}
+
 .muted {
   color: var(--muted);
 }
@@ -672,4 +688,170 @@ h4 {
 
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* ---------- simpler user-facing assistant ---------- */
+
+.chat-app {
+  min-height: 320px;
+}
+
+.chat-context {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #0f1722;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.chat-message {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+}
+
+.chat-message-user {
+  flex-direction: row-reverse;
+}
+
+.chat-avatar {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  padding-top: 5px;
+}
+
+.chat-bubble,
+.assistant-bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 88%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+
+.chat-message-user .chat-bubble {
+  background: #123447;
+  border-color: #155e75;
+}
+
+.assistant-bubble {
+  max-width: 100%;
+}
+
+.assistant-bubble span {
+  color: var(--muted);
+}
+
+.chat-time {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.chat-composer {
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.chat-hint {
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+
+.selection-kind {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .7px;
+}
+
+.selection-description {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 9px;
+}
+
+.quick-label {
+  width: 100%;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+}
+
+.plan-panel {
+  flex: 0 0 auto;
+  max-height: 58vh;
+}
+
+.plan-actions-readable {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.readable-action {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
+.plan-note {
+  margin: 8px 0;
+  padding: 7px 8px;
+  border-left: 2px solid var(--accent);
+  background: #0f202a;
+}
+
+.plan-note strong {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 11px;
+}
+
+.plan-metrics {
+  font-size: 10px;
+}
+
+.plan-details summary {
+  cursor: pointer;
+}
+
+
+.btn-small {
+  padding: 3px 7px;
+  font-size: 10px;
+  margin-left: auto;
+}
+
+
+.layer-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
 }

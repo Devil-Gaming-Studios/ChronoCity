@@ -58,7 +58,7 @@ class ComponentType(str, Enum):
 
 class Node(BaseModel):
     id: str
-    kind: Literal["junction", "substation", "hospital", "depot", "underpass"] = "junction"
+    kind: Literal["junction", "substation", "hospital", "depot", "underpass", "shelter"] = "junction"
     x: float = 0.0
     y: float = 0.0
     zone: str = "Z0"
@@ -142,6 +142,15 @@ class Hospital(BaseModel):
     departments: list[HospitalDepartment] = Field(default_factory=list)
 
 
+class Shelter(BaseModel):
+    id: str
+    node_id: str
+    name: str = "Emergency Shelter"
+    capacity: int = 0
+    available: int = 0
+    active: bool = False
+
+
 class Underpass(BaseModel):
     id: str
     edge_id: str
@@ -155,6 +164,7 @@ class CityGraph(BaseModel):
     feeders: list[Feeder] = Field(default_factory=list)
     signals: list[Signal] = Field(default_factory=list)
     hospitals: list[Hospital] = Field(default_factory=list)
+    shelters: list[Shelter] = Field(default_factory=list)
     underpasses: list[Underpass] = Field(default_factory=list)
     buildings: list[Building] = Field(default_factory=list)
     infrastructure: list[InfrastructureAsset] = Field(default_factory=list)
@@ -200,6 +210,8 @@ class ValidatedSignal(BaseModel):
     severity: IncidentSeverity = IncidentSeverity.INFO
     entity_ids: list[str] = Field(default_factory=list)
     trust: float = 1.0
+    lat: float | None = None
+    lon: float | None = None
     ts: float = Field(default_factory=_now)
 
 
@@ -227,6 +239,8 @@ class Incident(BaseModel):
     dedupe_key: str = ""
     created_ts: float = Field(default_factory=_now)
     resolved: bool = False
+    evidence_sources: list[str] = Field(default_factory=list)
+    watch_only: bool = False
 
 
 # ---------------------------------------------------------------- actions & plans
@@ -312,6 +326,7 @@ class SimulationResult(BaseModel):
     baseline_travel_time_s: float = 0.0
     dark_junctions: int = 0
     contained_hops: int = 0
+    jammed_arterials: int = 0
     blocked_edges: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
     trace: list[dict[str, Any]] = Field(default_factory=list)
@@ -322,6 +337,7 @@ class CitySnapshot(BaseModel):
     t: float = 0.0
     powered: dict[str, bool] = Field(default_factory=dict)      # feeder_id -> on
     signals_ok: dict[str, bool] = Field(default_factory=dict)   # signal_id -> ok
+    signal_timing_s: dict[str, float] = Field(default_factory=dict) # signal_id -> cycle/retiming seconds
     flooded_edges: dict[str, float] = Field(default_factory=dict)  # edge_id -> depth_cm
     closed_edges: dict[str, bool] = Field(default_factory=dict)    # edge_id -> closed
     edge_factor: dict[str, float] = Field(default_factory=dict)    # edge_id -> reroute factor
@@ -332,3 +348,4 @@ class CitySnapshot(BaseModel):
     water_failures: dict[str, str] = Field(default_factory=dict)
     vehicles: dict[str, str] = Field(default_factory=dict)      # vehicle_id -> edge_id
     ambulances: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    shelters: dict[str, dict[str, Any]] = Field(default_factory=dict)

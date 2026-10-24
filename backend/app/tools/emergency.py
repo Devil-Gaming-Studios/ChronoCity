@@ -62,6 +62,17 @@ def propose_dispatch(ambulance_id: str, from_edge: str, rationale: str = "") -> 
     )
 
 
+def propose_activate_shelter(shelter_id: str, available: int, rationale: str = "") -> Action:
+    return Action(
+        tool="emergency.activate_shelter",
+        entity_ids=[shelter_id],
+        params={"shelter_id": shelter_id, "available": available},
+        impact=Impact.MEDIUM,
+        rationale=rationale or "activate an emergency shelter",
+        owner="emergency",
+    )
+
+
 def propose_set_destination(ambulance_id: str, dest_node: str, rationale: str = "") -> Action:
     return Action(
         tool="emergency.set_destination",
@@ -79,4 +90,5 @@ __all__ = [
     "response_units",
     "propose_dispatch",
     "propose_set_destination",
+    "propose_activate_shelter",
 ]

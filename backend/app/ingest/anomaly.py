@@ -18,6 +18,7 @@ class AnomalyDetector:
         self.trust_threshold = trust_threshold
         self._history: dict[tuple[str, str], list[float]] = defaultdict(list)
         self._seen_dedupe: set[str] = set()
+        self.watch_alerts: list[dict[str, Any]] = []
 
     def _zscore(self, key: tuple[str, str], value: float) -> float:
         hist = self._history[key]
@@ -52,8 +53,14 @@ class AnomalyDetector:
         key = (zone, kind)
         z = self._zscore(key, peak)
 
+        sources = set(agg.get("sources", []))
+        if sources == {"report"}:
+            # A citizen report alone can never create an actionable incident.
+            self.watch_alerts.append({"zone": zone, "kind": kind, "trust": trust, "reason": "report-only evidence", "ts": agg.get("ts")})
+            return []
         if trust < self.trust_threshold:
-            # weak signal: record an Anomaly but do NOT create an actionable incident
+            # weak signal: record a watch alert but do NOT create an actionable incident
+            self.watch_alerts.append({"zone": zone, "kind": kind, "trust": trust, "reason": "below trust threshold", "ts": agg.get("ts")})
             return []
 
         if kind == "water_level_cm" and peak >= 100:
@@ -90,6 +97,8 @@ class AnomalyDetector:
             if inc.dedupe_key in self._seen_dedupe:
                 continue
             self._seen_dedupe.add(inc.dedupe_key)
+            inc.evidence_sources = sorted(sources)
+            inc.watch_only = False
             fresh.append(inc)
         return fresh
 

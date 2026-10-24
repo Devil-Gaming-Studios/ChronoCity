@@ -13,8 +13,32 @@ import type {
 } from "./types";
 
 async function json<T>(res: Response): Promise<T> {
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const body = (await res.clone().json()) as { detail?: unknown; error?: unknown };
+      detail = String(body.detail ?? body.error ?? "");
+    } catch {
+      /* use the HTTP status when the server did not return JSON */
+    }
+    throw new Error(`${res.status} ${res.statusText}${detail ? `: ${detail}` : ""}`);
+  }
   return (await res.json()) as T;
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 15000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("The command timed out after 15 seconds. Check that the backend is running and try again.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 const post = (url: string, body?: unknown) =>
@@ -34,8 +58,9 @@ export const api = {
   actionLog: () => fetch("/api/plans/action_log").then(json<ActionLogEntry[]>),
   metrics: () => fetch("/api/plans/metrics").then(json<Metrics>),
   approve: (plan_id: string, approved: boolean, note = "") =>
-    post("/api/plans/approve", { plan_id, approved, note }).then((r) => r.json()),
-  execute: (plan_id: string) => post("/api/plans/execute", { plan_id }).then((r) => r.json()),
+    post("/api/plans/approve", { plan_id, approved, note }).then(json<Record<string, unknown>>),
+  execute: (plan_id: string) => post("/api/plans/execute", { plan_id }).then(json<Record<string, unknown>>),
+  editPlan: (plan_id: string, remove_action_ids: string[]) => post("/api/plans/edit", { plan_id, remove_action_ids }).then(json<Record<string, unknown>>),
 
   compare: () => fetch("/api/timeline/metrics").then(json<Compare>),
   whatIf: (actions: ActionInput[], label: string) =>
@@ -59,5 +84,9 @@ export const api = {
   vehicleRoute: (body: { vehicle_type: "firetruck" | "police" | "ambulance"; origin?: string; destination_node?: string; hospital_id?: string; incident_edge_id?: string }) =>
     post("/api/routes/vehicles", body).then(json<Record<string, unknown>>),
   runCommand: (body: { text: string; start_from?: "healthy" | "current"; selected_entity_id?: string; selected_entity_type?: string }) =>
-    post("/api/commands/run", body).then(json<Record<string, unknown>>),
+    fetchWithTimeout("/api/commands/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(json<Record<string, unknown>>),
 };

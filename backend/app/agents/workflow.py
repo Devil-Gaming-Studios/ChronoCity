@@ -63,6 +63,8 @@ class Workflow:
     # ------------------------------------------------ stage 2: plan (parallel specialists)
 
     async def plan(self, broadcast: Broadcast | None = None) -> JointPlan:
+        import time
+        self.orch.plan_started_ts = time.time()
         incidents = self.orch.open_incidents()
         incident_ids = [i.id for i in incidents]
         llm = get_llm()
@@ -88,6 +90,8 @@ class Workflow:
                     detail=f"{len(p.actions)} actions after {len(p.read_calls)} reads",
                 )
             )
+            for read_call in p.read_calls:
+                self.orch.log(ActionLogEntry(plan_id="pending", tool=read_call, phase="propose", actor=p.agent, detail="read tool call", impact="LOW"))
 
         plan = self.toolbox.build_joint_plan(proposals, incident_ids)
         if broadcast:
@@ -136,6 +140,8 @@ class Workflow:
 
         self.orch.current_plan = plan
         self.orch.plan_history.append(plan)
+        self.orch.last_plan_duration_s = time.time() - (self.orch.plan_started_ts or time.time())
+        plan.metrics["time_to_plan_s"] = round(self.orch.last_plan_duration_s, 3)
         if broadcast:
             await broadcast("verified", {
                 "plan_id": plan.id, "passed": result.passed, "status": plan.status.value,
@@ -221,6 +227,8 @@ class Workflow:
             "approvals": len(self.orch.approvals),
             "actions_executed": sum(1 for e in self.orch.action_log if e.phase == "execute"),
             "readings_processed": getattr(self, "_readings_seen", readings),
+            "time_to_plan_s": self.orch.last_plan_duration_s,
+            "watch_alerts": len(self.orch.watch_alerts),
         }
 
 

@@ -27,7 +27,7 @@ def parse_command(body: CommandRequest) -> tuple[dict[str, Any], SimulationReque
     text = body.text.strip()
     lowered = text.lower()
     if not text:
-        return {"ok": False, "answer": "Type a command such as 'rain 120 mm' or 'trip substation S2'.", "suggestions": ["rain 120 mm", "set substation S2 load to 45 MW", "break pipe ASSET_ID"]}, None
+        return {"ok": False, "answer": "Type a command such as 'rain 120 mm' or 'trip substation S2'.", "suggestions": ["rain 120 mm", "set substation S2 load to 45 MW", "break pipe ASSET_ID", "heavy traffic on the selected road"]}, None
 
     hazards: list[dict[str, Any]] = []
     parsed: dict[str, Any] = {"text": text}
@@ -47,6 +47,20 @@ def parse_command(body: CommandRequest) -> tuple[dict[str, Any], SimulationReque
         elif ("power" in lowered or "load" in lowered) and station_match and load is not None:
             hazards.append({"type": "power_overload", "substation_id": station_match.group(1), "load_mw": load, "label": text})
             parsed.update({"intent": "power_overload", "substation_id": station_match.group(1), "load_mw": load})
+        elif ("flood" in lowered or "flooding" in lowered) and body.selected_entity_id:
+            if body.selected_entity_type not in {"edge", "road", "underpass"}:
+                return {"ok": False, "answer": "Flooding can only be applied to a selected road.", "suggestions": ["select a road", "heavy traffic on the selected road"]}, None
+            depth = _number(r"(\d+(?:\.\d+)?)\s*cm", text) or 100.0
+            hazards.append({"type": "flood", "edge_id": body.selected_entity_id, "depth_cm": depth, "label": text})
+            parsed.update({"intent": "flood", "edge_id": body.selected_entity_id, "depth_cm": depth})
+        elif "heavy traffic" in lowered or "traffic is heavy" in lowered or "make traffic heavy" in lowered or "congestion" in lowered:
+            if not body.selected_entity_id:
+                return {"ok": False, "answer": "Select a road first, then say “heavy traffic on the selected road”.", "suggestions": ["heavy traffic on the selected road", "close the selected road"]}, None
+            if body.selected_entity_type not in {"edge", "road", "underpass"}:
+                return {"ok": False, "answer": "Heavy traffic can only be applied to a selected road.", "suggestions": ["select a road", "close the selected road"]}, None
+            factor = _number(r"(\d+(?:\.\d+)?)\s*(?:x|times)", text) or 2.0
+            hazards.append({"type": "heavy_traffic", "edge_id": body.selected_entity_id, "congestion_factor": factor, "label": text})
+            parsed.update({"intent": "heavy_traffic", "edge_id": body.selected_entity_id, "congestion_factor": factor})
         elif ("wire" in lowered or "power line" in lowered) and ("break" in lowered or "cut" in lowered or "disable" in lowered):
             asset = re.search(r"(?:wire|power line|line)\s+([A-Za-z0-9_.:-]+)", text, re.IGNORECASE)
             asset_id = asset.group(1) if asset else body.selected_entity_id
@@ -58,7 +72,7 @@ def parse_command(body: CommandRequest) -> tuple[dict[str, Any], SimulationReque
             asset = re.search(r"(?:pipe|pipeline|water)\s+([A-Za-z0-9_.:-]+)", text, re.IGNORECASE)
             asset_id = asset.group(1) if asset else body.selected_entity_id
             if not asset_id:
-                return {"ok": False, "answer": "Select a water asset in the 3D map or include its asset ID.", "suggestions": ["break pipe ASSET_ID"]}, None
+                return {"ok": False, "answer": "Select a water asset in the 3D map or include its asset ID.", "suggestions": ["break pipe ASSET_ID", "heavy traffic on the selected road"]}, None
             hazards.append({"type": "water_pipe_break", "asset_id": asset_id, "label": text})
             parsed.update({"intent": "water_pipe_break", "asset_id": asset_id})
         elif "disable" in lowered or "close" in lowered:
@@ -79,16 +93,32 @@ def parse_command(body: CommandRequest) -> tuple[dict[str, Any], SimulationReque
                 hazards.append({"type": "close_edge", "edge_id": entity_id, "label": text})
                 parsed.update({"intent": "close_edge", "edge_id": entity_id})
         else:
-            return {"ok": False, "answer": "I could not map that command to a safe simulation input.", "suggestions": ["rain 120 mm", "trip substation S2", "set substation S2 load to 45 MW", "disable selected feature"]}, None
+            return {"ok": False, "answer": "I could not map that command to a safe simulation input.", "suggestions": ["rain 120 mm", "trip substation S2", "set substation S2 load to 45 MW", "disable selected feature", "heavy traffic on the selected road"]}, None
 
     return parsed, SimulationRequest(label=text, start_from="current" if body.start_from == "current" else "healthy", hazards=hazards)
 
 
 @router.post("/run")
 async def run_command(body: CommandRequest, request: Request) -> dict[str, Any]:
+    mgr = request.app.state.ws_manager
+    await mgr.broadcast("command_received", {"text": body.text})
     parsed, simulation = parse_command(body)
     if simulation is None:
+        await mgr.broadcast("command_rejected", parsed)
         return parsed
-    response = await run_simulation(simulation, request)
+    await mgr.broadcast("command_parsed", parsed)
+    await mgr.broadcast("command_running", {"label": simulation.label, "hazards": [h.model_dump() for h in simulation.hazards]})
+    try:
+        response = await run_simulation(simulation, request)
+    except Exception as exc:
+        await mgr.broadcast("command_error", {"text": body.text, "detail": str(exc)})
+        raise
     response["parsed"] = parsed
+    await mgr.broadcast("command_response", {
+        "text": body.text,
+        "answer": response.get("answer", ""),
+        "explanation": response.get("explanation", []),
+        "affected_nodes": response.get("affected_nodes", []),
+        "affected_assets": response.get("affected_assets", []),
+    })
     return response

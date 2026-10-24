@@ -20,6 +20,7 @@ def initial_state(graph: CityGraph) -> CitySnapshot:
             snap.water_pressure_kpa[asset.id] = 350.0
     for s in graph.signals:
         snap.signals_ok[s.id] = True
+        snap.signal_timing_s[s.id] = 60.0
     refresh_travel(snap, graph)
     return snap
 
@@ -141,6 +142,11 @@ def apply_action(state: CitySnapshot, graph: CityGraph, action: Action) -> CityS
         s.closed_edges[p.get("edge_id", "")] = True
         refresh_travel(s, graph)
 
+    elif tool == "traffic.set_congestion":
+        edge_id = str(p.get("edge_id") or (action.entity_ids[0] if action.entity_ids else ""))
+        s.edge_factor[edge_id] = max(s.edge_factor.get(edge_id, 1.0), float(p.get("factor", 2.0)))
+        refresh_travel(s, graph)
+
     elif tool == "traffic.reroute":
         # factor adjusts edge preference; refresh_travel applies it
         slow = p.get("slow_edge_id")
@@ -154,6 +160,12 @@ def apply_action(state: CitySnapshot, graph: CityGraph, action: Action) -> CityS
     elif tool == "traffic.signal_dark":
         for sid in p.get("signal_ids", action.entity_ids):
             s.signals_ok[sid] = False
+        refresh_travel(s, graph)
+
+    elif tool == "traffic.retime_signals":
+        timing = max(10.0, float(p.get("cycle_s", 60.0)))
+        for sid in p.get("signal_ids", action.entity_ids):
+            s.signal_timing_s[sid] = timing
         refresh_travel(s, graph)
 
     elif tool == "water.break_pipe":
@@ -187,6 +199,11 @@ def apply_action(state: CitySnapshot, graph: CityGraph, action: Action) -> CityS
         s.ambulances.setdefault(amb, {})
         s.ambulances[amb]["dest"] = p.get("dest_node", "H1")
 
+    elif tool == "emergency.activate_shelter":
+        shelter_id = str(p.get("shelter_id") or (action.entity_ids[0] if action.entity_ids else ""))
+        s.shelters.setdefault(shelter_id, {})
+        s.shelters[shelter_id].update({"active": True, "available": p.get("available", 0)})
+
     # unknown tools are ignored (defence-in-depth; the registry rejects them earlier)
     return s
 
@@ -219,4 +236,25 @@ def reachable_travel_time(state: CitySnapshot, graph: CityGraph, src: str, dst: 
     return float("inf")
 
 
-__all__ = ["initial_state", "apply_action", "reachable_travel_time", "refresh_travel", "GRIDLOCK_FACTOR", "BLOCKED_S"]
+def advance_tick(state: CitySnapshot, graph: CityGraph, seconds: float = 1.0) -> CitySnapshot:
+    """Advance the deterministic twin clock without mutating the input snapshot."""
+    s = state.model_copy(deep=True)
+    s.t += max(0.0, seconds)
+    # Floodwater recedes slowly; congestion decays toward free flow.
+    for edge_id, depth in list(s.flooded_edges.items()):
+        next_depth = max(0.0, depth - seconds * 0.5)
+        if next_depth <= 0.0:
+            s.flooded_edges.pop(edge_id, None)
+        else:
+            s.flooded_edges[edge_id] = next_depth
+    for edge_id, factor in list(s.edge_factor.items()):
+        next_factor = max(1.0, factor - seconds * 0.02)
+        if next_factor <= 1.0:
+            s.edge_factor.pop(edge_id, None)
+        else:
+            s.edge_factor[edge_id] = next_factor
+    refresh_travel(s, graph)
+    return s
+
+
+__all__ = ["initial_state", "apply_action", "advance_tick", "reachable_travel_time", "refresh_travel", "GRIDLOCK_FACTOR", "BLOCKED_S"]

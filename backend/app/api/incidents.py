@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
-from ..city.cascade import trace_cascade
+from ..city.cascade import build_dependency_graph, trace_cascade
 from ..models import CitySnapshot, Incident
 
 router = APIRouter(prefix="/api/incidents", tags=["incidents"])
@@ -46,6 +46,17 @@ async def cascade(request: Request) -> dict[str, Any]:
     if not roots:
         return {"roots": [], "hops": [], "contained_hops": 0, "affected": []}
     return trace_cascade(graph, roots, blocked_edges=blocked, dark_nodes=dark_nodes)
+
+
+@router.get("/dependency-graph")
+async def dependency_graph(request: Request) -> dict[str, Any]:
+    g = build_dependency_graph(request.app.state.graph)
+    return {"nodes": [{"id": n, **data} for n, data in g.nodes(data=True)], "edges": [{"source": u, "target": v, **data} for u, v, data in g.edges(data=True)]}
+
+
+@router.get("/watch")
+async def watch_alerts(request: Request) -> list[dict[str, Any]]:
+    return list(request.app.state.orchestrator.watch_alerts[-100:])
 
 
 @router.get("/state")

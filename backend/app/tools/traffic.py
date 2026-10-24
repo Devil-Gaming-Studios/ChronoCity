@@ -116,6 +116,17 @@ def propose_flood_edge(edge_id: str, depth_cm: float, rationale: str = "") -> Ac
     )
 
 
+def propose_retime_signals(signal_ids: list[str], cycle_s: float = 45.0, rationale: str = "") -> Action:
+    return Action(
+        tool="traffic.retime_signals",
+        entity_ids=signal_ids,
+        params={"signal_ids": signal_ids, "cycle_s": cycle_s},
+        impact=Impact.MEDIUM,
+        rationale=rationale or "retime signals to clear a congested corridor",
+        owner="traffic",
+    )
+
+
 def propose_reroute(slow_edge_id: str, fast_edge_id: str, factor: float = 2.0, rationale: str = "") -> Action:
     return Action(
         tool="traffic.reroute",
@@ -134,4 +145,5 @@ __all__ = [
     "propose_close_edge",
     "propose_flood_edge",
     "propose_reroute",
+    "propose_retime_signals",
 ]

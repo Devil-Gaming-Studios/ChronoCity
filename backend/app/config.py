@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     window_seconds: float = 2.0
     trust_action_threshold: float = 0.5
     dedupe_window_s: float = 30.0
+    ingest_api_key: str = ""
+    ingest_rate_limit_per_minute: int = 120
+    captcha_required: bool = False
+    captcha_demo_token: str = "demo"
+    llm_fallback_mode: Literal["scripted", "ollama"] = "scripted"
+    llm_fallback_model: str = "small"
 
 
 @lru_cache

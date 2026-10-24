@@ -15,6 +15,17 @@ class ApprovalBody(BaseModel):
     approved: bool = True
 
 
+class EditBody(BaseModel):
+    plan_id: str
+    remove_action_ids: list[str] = []
+    note: str = "operator edited response"
+
+
+class ManualPlanBody(BaseModel):
+    label: str = "manual operator response"
+    actions: list[dict[str, Any]] = []
+
+
 @router.get("")
 async def list_plans(request: Request) -> list[dict[str, Any]]:
     orch = request.app.state.orchestrator
@@ -64,6 +75,39 @@ async def current_plan(request: Request) -> dict[str, Any]:
         "proposals": [pr.model_dump() for pr in p.proposals],
         "needs_high_approval": p.status.value == "PENDING_APPROVAL",
     }
+
+
+@router.post("/edit")
+async def edit(body: EditBody, request: Request) -> dict[str, Any]:
+    wf = request.app.state.workflow
+    plan = wf._find_plan(body.plan_id)
+    if plan is None:
+        return {"ok": False, "error": "plan_not_found"}
+    if plan.status.value not in {"PENDING_APPROVAL", "VERIFIED", "REVISED"}:
+        return {"ok": False, "error": f"plan in status {plan.status.value}, not editable"}
+    removed = set(body.remove_action_ids)
+    before = len(plan.actions)
+    plan.actions = [action for action in plan.actions if action.id not in removed]
+    for proposal in plan.proposals:
+        proposal.actions = [action for action in proposal.actions if action.id not in removed]
+    plan.proposals = [proposal for proposal in plan.proposals if proposal.actions]
+    plan.dropped_action_ids.extend(sorted(removed))
+    plan.resolution = f"Operator edited the response: removed {before - len(plan.actions)} action(s)."
+    await request.app.state.ws_manager.broadcast("plan_edited", {"plan_id": plan.id, "removed": before - len(plan.actions), "note": body.note})
+    return {"ok": True, "plan_id": plan.id, "removed": before - len(plan.actions), "status": plan.status.value}
+
+
+@router.post("/manual")
+async def manual(body: ManualPlanBody, request: Request) -> dict[str, Any]:
+    """Manual fallback: create a verified operator plan when agents are unavailable."""
+    from ..models import Action, JointPlan
+    orch = request.app.state.orchestrator
+    actions = [Action.model_validate(item) for item in body.actions]
+    plan = JointPlan(id=f"manual-{len(orch.plan_history)+1}", actions=actions, incident_ids=[], status="VERIFIED", resolution="Manual operator fallback plan.")
+    orch.current_plan = plan
+    orch.plan_history.append(plan)
+    await request.app.state.ws_manager.broadcast("manual_plan", {"plan_id": plan.id, "actions": len(actions)})
+    return {"ok": True, "plan": {"id": plan.id, "status": plan.status.value, "actions": [action.model_dump() for action in actions]}}
 
 
 @router.post("/approve")

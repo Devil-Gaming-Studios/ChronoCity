@@ -32,6 +32,7 @@ class Critic:
                 "baseline_travel_time_s": result.baseline_travel_time_s,
                 "dark_junctions": float(result.dark_junctions),
                 "contained_hops": float(result.contained_hops),
+                "jammed_arterials": float(result.jammed_arterials),
             }
             plan.needs_revision = False
             plan.critic_feedback = (
