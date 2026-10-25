@@ -81,22 +81,32 @@ flowchart LR
 
 ```text
 chronotwin/
-├── docker-compose.yml
-├── .env.example
-├── backend/app/
-│   ├── main.py            FastAPI app + startup wiring
-│   ├── config.py          settings
-│   ├── models.py          Pydantic domain models
-│   ├── db/                schema.sql + asyncpg pool
-│   ├── city/              graph builder + cascade tracer
-│   ├── sim/               state, engine, scenarios
-│   ├── ingest/            bus, validator, trust, aggregator, anomaly, api
-│   ├── agents/            orchestrator, specialists, negotiator, critic, workflow, llm
-│   ├── tools/             power, traffic, emergency, plan (read vs mutate split)
-│   ├── api/               incidents, plans, timeline, scenarios, ws
-│   └── tests/             pytest
-├── frontend/              Vite + React + TS + Three.js
-│   └── src/               App, TwinScene, panels, api client, WS hook
+├── docker-compose.yml          Timescale + Redis + Redpanda (optional)
+├── .env.example                every setting, with offline defaults
+├── backend/
+│   ├── pyproject.toml
+│   ├── data/                   audit.sqlite3 (git-ignored, created at runtime)
+│   └── app/
+│       ├── main.py             FastAPI app, WebSocket, startup wiring
+│       ├── runtime.py          active-city runtime (demo or imported)
+│       ├── config.py           settings (env / .env)
+│       ├── models.py           Pydantic domain models
+│       ├── db/                 schema.sql, asyncpg pool, SQLite audit store
+│       ├── city/               demo city, OSM importer, cascade tracer
+│       ├── sim/                state, engine, scenarios
+│       ├── ingest/             bus, validator, trust, aggregator, anomaly, API
+│       ├── agents/             orchestrator, specialists, negotiator, critic, workflow, llm
+│       ├── tools/              power, traffic, emergency, plan (read vs mutate split)
+│       ├── services/           community complaint verification
+│       ├── api/                audit, cities, commands, community, incidents,
+│       │                       infrastructure, plans, scenarios, simulations, timeline, ws
+│       └── tests/              pytest
+├── frontend/                   Vite + React 18 + TypeScript + Three.js
+│   └── src/
+│       ├── App.tsx, api.ts, useChronoSocket.ts, types.ts
+│       └── components/         TwinScene (3D), ControlPanel, SimulationPanel, TimelineBar,
+│                               IncidentPanel, ChatterPanel, ComplaintsPanel,
+│                               PlanPanel, OperatorDashboard
 └── README.md
 ```
 
@@ -165,7 +175,7 @@ npm install
 npm run dev          # http://localhost:5173
 ```
 
-Vite proxies `/api` and `/ws` to `http://localhost:8000`, so keep the backend running on port 8000. A production type-check and bundle is `npm run build` (runs `tsc -b` first).
+Vite proxies `/api` and `/ws` to `http://localhost:8000`, so keep the backend running on port 8000. A production type-check and bundle is `npm run build` (runs `tsc -b` first; Vite's "chunk larger than 500 kB" notice is expected because Three.js is bundled).
 
 ### 3️⃣ Trigger the demo
 
@@ -190,7 +200,7 @@ curl -X POST http://localhost:8000/api/scenarios/reset
 
 ```bash
 cd backend
-pytest        # city graph, simulator, conflicts, ingest, workflow
+pytest        # city graph, simulator, ingest, agents/workflow, community, audit
 ```
 
 ### 🐳 Optional: full infrastructure stack
@@ -221,6 +231,21 @@ docker compose exec -T timescale psql -U twin -d chronotwin < backend/app/db/sch
 
 ---
 
+## 🏘️ The built-in demo city
+
+The default city is a small hand-built grid so scenarios stay reproducible.
+
+| Part | Contents |
+|---|---|
+| **Core (zones Z1–Z2)** | Junctions J1–J8 and N5–N7, flood-prone underpass **U1** on `E_J4_J6_U1`, hospital **H1** (City General), ambulance depot, **Riverside Shelter**, substations **S1** and **S2** |
+| **Eastern extension (zone Z3)** | East junctions E1–E6, four checkpoint junctions **CP1–CP4** (tagged `checkpoint`), and substation **S3** with feeders F5/F6 powering the eastern signals |
+| **Buildings** | 13 synthetic footprints (tagged `synthetic`) that go through the same 3D extrusion path as imported OSM buildings |
+| **Utilities** | Three synthetic water mains (`PIPE_Z1`–`PIPE_Z3`), each tied to an explicit affected road |
+
+The original core is unchanged, so existing scenarios and routes behave as before. Any imported OSM city replaces the demo city until the backend restarts.
+
+---
+
 ## 🎬 The demo story
 
 A flood hits underpass **U1**, substation **S2** trips, junctions **J2–J5** go dark, the detour is dark too, and ambulance **A1**, bound for hospital **H1**, is delayed.
@@ -231,6 +256,8 @@ A flood hits underpass **U1**, substation **S2** trips, junctions **J2–J5** go
 4. The **Critic rejects** the first plan and the **Revision agent** fixes it.
 5. The **operator approves**.
 6. The **Chrono timeline** shows before / after / what-if.
+
+The eastern grid on **S3** is unaffected by the S2 trip, which makes it a handy comparison when you try your own hazards.
 
 ---
 
@@ -364,6 +391,39 @@ The Operator Dashboard reads **durable audit records from the backend database**
 
 ---
 
+## 🔌 API at a glance
+
+Interactive docs live at **http://localhost:8000/docs**. The UI streams live updates from the `ws://localhost:8000/ws` WebSocket.
+
+| Area | Endpoints |
+|---|---|
+| **Status** | `GET /` · `GET /api/health` · `GET /api/city` (active city graph) |
+| **Scenarios** | `POST /api/scenarios/{combined\|flood\|trip}/start` · `POST /api/scenarios/reset` |
+| **Incidents** | `GET /api/incidents` · `/cascade` · `/dependency-graph` · `/watch` · `/state` |
+| **Plans** | `GET /api/plans` · `/current` · `/metrics` · `/action_log` · `POST /edit` · `/manual` · `/approve` · `/execute` · `/generate` |
+| **Timeline / what-if** | `GET /api/timeline` · `/metrics` · `POST /api/timeline/whatif` |
+| **Simulation** | `POST /api/simulations/run` · `/tick` · `/fork` · `GET /capabilities` |
+| **Cities** | `GET /api/cities/current` · `POST /api/cities/import/osm` |
+| **Infrastructure** | `GET /api/infrastructure/assets` · `/diagnostics` · `POST /diagnostics/preview` · `GET /api/hospitals[/{id}]` · `POST /api/routes/vehicles` |
+| **Commands** | `POST /api/commands/run` |
+| **Community** | `GET /api/community/state` · `POST /complaints` · `/pipeline-preview` · `/plan` |
+| **Audit** | `GET /api/audit/events` · `/plans` · `/pending` |
+| **Ingest** | `POST /api/ingest/sensor` · `/sensor/batch` · `/report` · `GET /health` |
+
+<details>
+<summary><b>Ingest guardrails</b></summary>
+
+Sensor readings and citizen reports enter through the ingest API and then the validator, trust scorer, aggregator and anomaly detector before any agent sees them.
+
+- Optional `X-API-Key` header (set `INGEST_API_KEY`) and a per-client rate limit (`INGEST_RATE_LIMIT_PER_MINUTE`, default 120).
+- Citizen reports are de-duplicated by category, zone and rounded location within `DEDUPE_WINDOW_S` (default 30 s).
+- Set `CAPTCHA_REQUIRED=true` to require an `X-Captcha-Token` header (demo token: `demo`).
+- Report free text is stored for audit but **never published to the bus or prompted**; only structured fields continue.
+
+</details>
+
+---
+
 ## 🎛️ Modes
 
 | Knob | Values | Effect |
@@ -373,6 +433,22 @@ The Operator Dashboard reads **durable audit records from the backend database**
 | `LLM_CALL_BUDGET` | int | per-run cap proving "LLM calls scale with incidents, not data" |
 
 For live models set `LLM_MODE=gemini` + `GEMINI_API_KEY` (or `claude` + `ANTHROPIC_API_KEY`) and run `pip install -e ".[agents]"`. For a local model set `LLM_MODE=ollama` against `OLLAMA_BASE_URL`.
+
+---
+
+### All settings
+
+Set these in `.env` (copied from `.env.example`); every one has an offline default.
+
+| Group | Variables |
+|---|---|
+| **Infrastructure** | `DATABASE_URL` · `REDIS_URL` · `KAFKA_BOOTSTRAP` · `BUS` |
+| **Audit** | `AUDIT_DB_PATH` (default `backend/data/audit.sqlite3`) |
+| **LLM** | `LLM_MODE` · `LLM_MODEL` · `LLM_CALL_BUDGET` · `GEMINI_API_KEY` · `ANTHROPIC_API_KEY` · `OLLAMA_BASE_URL` · `LLM_FALLBACK_MODE` · `LLM_FALLBACK_MODEL` |
+| **Simulator** | `SIM_TICK_SECONDS` (1.0) · `SIM_SEED` (1337) |
+| **OSM import** | `OVERPASS_URL` · `OSM_USER_AGENT` |
+| **Ingest** | `WINDOW_SECONDS` · `TRUST_ACTION_THRESHOLD` · `DEDUPE_WINDOW_S` · `INGEST_API_KEY` · `INGEST_RATE_LIMIT_PER_MINUTE` · `CAPTCHA_REQUIRED` |
+| **API** | `API_HOST` · `API_PORT` · `LOG_LEVEL` |
 
 ---
 
