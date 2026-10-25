@@ -3,6 +3,7 @@ from __future__ import annotations
 import networkx as nx
 
 from ..models import (
+    Building,
     CityGraph,
     Edge,
     Feeder,
@@ -30,7 +31,12 @@ def build_demo_city() -> CityGraph:
         N5---J6---J7---H1(hospital)
 
     Underpass U1 sits on edge J4-J6 (a low-lying cut-through).
-    Substation S1 feeds the north, S2 feeds the south/east.
+    Substation S1 feeds the north, S2 feeds the south/east, and the new S3
+    extension substation feeds the eastern checkpoint corridor.
+
+    The original core remains unchanged. The eastern extension adds a second
+    street band, four checkpoint junctions, one additional substation, and
+    extrudable synthetic building footprints for the 3D view.
     """
     nodes: list[Node] = [
         Node(id="J1", kind="junction", x=0, y=2, zone="Z1", name="J1"),
@@ -49,6 +55,19 @@ def build_demo_city() -> CityGraph:
         Node(id="S2", kind="substation", x=5, y=-1, zone="Z2", name="Substation S2"),
         Node(id="DEPOT", kind="depot", x=-1, y=1, zone="Z0", name="Ambulance Depot"),
         Node(id="SH1", kind="shelter", x=0, y=-1, zone="Z2", name="Riverside Shelter"),
+        # Eastern extension: checkpoint junctions keep the same visual language
+        # as the existing junctions while being explicitly tagged for operators.
+        Node(id="E1", kind="junction", x=8, y=3, zone="Z3", name="East Gateway"),
+        Node(id="E2", kind="junction", x=10, y=3, zone="Z3", name="East Terminal"),
+        Node(id="E3", kind="junction", x=8, y=1, zone="Z3", name="East Market"),
+        Node(id="E4", kind="junction", x=10, y=1, zone="Z3", name="East Works"),
+        Node(id="E5", kind="junction", x=8, y=-1, zone="Z3", name="East Hospital Link"),
+        Node(id="E6", kind="junction", x=10, y=-1, zone="Z3", name="East Riverside"),
+        Node(id="CP1", kind="junction", x=8, y=2, zone="Z3", name="Checkpoint CP1", tags={"checkpoint": "true"}),
+        Node(id="CP2", kind="junction", x=10, y=2, zone="Z3", name="Checkpoint CP2", tags={"checkpoint": "true"}),
+        Node(id="CP3", kind="junction", x=8, y=0, zone="Z3", name="Checkpoint CP3", tags={"checkpoint": "true"}),
+        Node(id="CP4", kind="junction", x=10, y=0, zone="Z3", name="Checkpoint CP4", tags={"checkpoint": "true"}),
+        Node(id="S3", kind="substation", x=9, y=-2, zone="Z3", name="Substation S3"),
     ]
 
     def road(eid: str, src: str, dst: str, length: float, kind: str = "road") -> Edge:
@@ -77,11 +96,29 @@ def build_demo_city() -> CityGraph:
         # changing the road topology used for ordinary route planning.
         road("E_S1_N6", "S1", "N6", 100, kind="feeder"),
         road("E_S2_J7", "S2", "J7", 100, kind="feeder"),
+        # Eastern extension roads. The original core roads above are kept
+        # intact so existing scenarios and routes remain reproducible.
+        road("E_N7_E1", "N7", "E1", 220),
+        road("E_J3_E2", "J3", "E2", 260),
+        road("E_J8_E3", "J8", "E3", 220),
+        road("E_H1_E5", "H1", "E5", 220),
+        road("E_E1_CP1", "E1", "CP1", 100),
+        road("E_CP1_E3", "CP1", "E3", 100),
+        road("E_E2_CP2", "E2", "CP2", 100),
+        road("E_CP2_E4", "CP2", "E4", 100),
+        road("E_E3_CP3", "E3", "CP3", 100),
+        road("E_CP3_E5", "CP3", "E5", 100),
+        road("E_E4_CP4", "E4", "CP4", 100),
+        road("E_CP4_E6", "CP4", "E6", 100),
+        road("E_CP1_CP2", "CP1", "CP2", 200),
+        road("E_CP3_CP4", "CP3", "CP4", 200),
+        road("E_S3_E5", "S3", "E5", 100, kind="feeder"),
     ]
 
     substations = [
         Substation(id="S1", node_id="S1", feeders=["F1", "F2"], capacity_mw=40, generation_mw=32),
         Substation(id="S2", node_id="S2", feeders=["F3", "F4"], capacity_mw=40, generation_mw=30),
+        Substation(id="S3", node_id="S3", feeders=["F5", "F6"], capacity_mw=36, generation_mw=28),
     ]
 
     feeders = [
@@ -89,6 +126,8 @@ def build_demo_city() -> CityGraph:
         Feeder(id="F2", substation_id="S1", serves=["SIG_N5", "SIG_N6"]),
         Feeder(id="F3", substation_id="S2", serves=["SIG_J5", "SIG_J6", "SIG_J7"]),
         Feeder(id="F4", substation_id="S2", serves=["SIG_J8", "SIG_N7"]),
+        Feeder(id="F5", substation_id="S3", serves=["SIG_E1", "SIG_CP1", "SIG_E3", "SIG_CP3"]),
+        Feeder(id="F6", substation_id="S3", serves=["SIG_E2", "SIG_CP2", "SIG_E4", "SIG_CP4", "SIG_E5", "SIG_E6"]),
     ]
 
     signals = [
@@ -103,6 +142,16 @@ def build_demo_city() -> CityGraph:
         Signal(id="SIG_J7", node_id="J7", feeder_id="F3"),
         Signal(id="SIG_J8", node_id="J8", feeder_id="F4"),
         Signal(id="SIG_N7", node_id="N7", feeder_id="F4"),
+        Signal(id="SIG_E1", node_id="E1", feeder_id="F5"),
+        Signal(id="SIG_CP1", node_id="CP1", feeder_id="F5"),
+        Signal(id="SIG_E3", node_id="E3", feeder_id="F5"),
+        Signal(id="SIG_CP3", node_id="CP3", feeder_id="F5"),
+        Signal(id="SIG_E2", node_id="E2", feeder_id="F6"),
+        Signal(id="SIG_CP2", node_id="CP2", feeder_id="F6"),
+        Signal(id="SIG_E4", node_id="E4", feeder_id="F6"),
+        Signal(id="SIG_CP4", node_id="CP4", feeder_id="F6"),
+        Signal(id="SIG_E5", node_id="E5", feeder_id="F6"),
+        Signal(id="SIG_E6", node_id="E6", feeder_id="F6"),
     ]
 
     hospitals = [
@@ -119,6 +168,50 @@ def build_demo_city() -> CityGraph:
     ]
     underpasses = [Underpass(id="U1", edge_id="E_J4_J6_U1", name="River Road Underpass")]
     shelters = [Shelter(id="SH1", node_id="SH1", name="Riverside Shelter", capacity=250, available=250)]
+
+    def building(
+        bid: str,
+        name: str,
+        x: float,
+        y: float,
+        width: float,
+        depth: float,
+        height_m: float,
+        kind: str = "residential",
+    ) -> Building:
+        return Building(
+            id=bid,
+            name=name,
+            kind=kind,
+            footprint=[
+                (x, y),
+                (x + width, y),
+                (x + width, y + depth),
+                (x, y + depth),
+            ],
+            height_m=height_m,
+            levels=max(1, round(height_m / 3.2)),
+            tags={"synthetic": "true"},
+        )
+
+    # Explicit footprints make the synthetic city use the same imported-building
+    # rendering path as an OSM city, instead of relying only on scene decoration.
+    buildings = [
+        building("B_Z1_CIVIC", "North Civic Block", 0.25, 2.35, 1.1, 0.42, 18, "civic"),
+        building("B_Z1_MARKET", "Central Market", 2.35, 2.35, 1.15, 0.42, 12, "commercial"),
+        building("B_Z1_HOUSING", "North Terrace", 4.35, 2.35, 1.1, 0.42, 15),
+        building("B_Z2_WAREHOUSE", "River Warehouse", 0.28, 0.35, 1.05, 0.42, 10, "industrial"),
+        building("B_Z2_OFFICES", "South Offices", 2.35, 1.35, 1.15, 0.42, 21, "commercial"),
+        building("B_Z2_LOGISTICS", "J7 Logistics", 4.35, -0.72, 1.05, 0.42, 9, "industrial"),
+        building("B_Z3_MEDICAL", "Hospital Annex", 6.45, 0.35, 0.9, 0.42, 16, "civic"),
+        building("B_EAST_GATE", "East Gateway Offices", 7.25, 2.35, 1.25, 0.42, 18, "commercial"),
+        building("B_EAST_TERMINAL", "East Terminal Hall", 9.2, 2.35, 1.15, 0.42, 14, "civic"),
+        building("B_EAST_MARKET", "East Market Row", 7.25, 1.35, 1.25, 0.42, 11, "commercial"),
+        building("B_EAST_WORKS", "East Works", 9.2, 1.35, 1.15, 0.42, 10, "industrial"),
+        building("B_EAST_HOUSING", "East Riverside Housing", 9.15, -0.72, 1.2, 0.42, 17),
+        building("B_S3_SERVICE", "S3 Utility Yard", 8.35, -2.65, 1.25, 0.42, 7, "industrial"),
+    ]
+
     # Explicit synthetic service/road relationships; never inferred from proximity.
     infrastructure = [
         InfrastructureAsset(
@@ -147,6 +240,7 @@ def build_demo_city() -> CityGraph:
         hospitals=hospitals,
         shelters=shelters,
         underpasses=underpasses,
+        buildings=buildings,
         infrastructure=infrastructure,
         source="demo",
         source_ref="built-in",

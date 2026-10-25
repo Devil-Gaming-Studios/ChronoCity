@@ -400,4 +400,6 @@ Mutating tools are **never registered directly with an agent**. Agents submit `A
 
 Map data © OpenStreetMap contributors · ODbL
 
+---
+
 </div>

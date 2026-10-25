@@ -6,11 +6,23 @@ from app.city.cascade import trace_cascade
 
 def test_graph_shape():
     g = build_demo_city()
-    assert len(g.nodes) >= 14
-    assert len(g.edges) >= 15
+    assert len(g.nodes) >= 27
+    assert len(g.edges) >= 34
     assert g.hospitals[0].node_id == "H1"
     assert g.underpasses[0].edge_id == "E_J4_J6_U1"
-    assert {s.id for s in g.substations} == {"S1", "S2"}
+    assert {s.id for s in g.substations} == {"S1", "S2", "S3"}
+    assert len(g.buildings) >= 13
+
+
+def test_eastern_extension_has_checkpoints_and_power_coverage():
+    g = build_demo_city()
+    checkpoints = {node.id for node in g.nodes if node.tags.get("checkpoint") == "true"}
+    assert checkpoints == {"CP1", "CP2", "CP3", "CP4"}
+    s3 = next(sub for sub in g.substations if sub.id == "S3")
+    assert s3.feeders == ["F5", "F6"]
+    assert {signal.node_id for signal in g.signals if signal.feeder_id in s3.feeders} >= {
+        "E1", "E2", "E3", "E4", "E5", "E6", "CP1", "CP2", "CP3", "CP4"
+    }
 
 
 def test_networkx_connected():
